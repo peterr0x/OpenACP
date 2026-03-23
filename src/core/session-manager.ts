@@ -74,7 +74,7 @@ export class SessionManager {
   getRecordByThread(channelId: string, threadId: string): import("./types.js").SessionRecord | undefined {
     return this.store?.findByPlatform(
       channelId,
-      (p) => String(p.topicId) === threadId,
+      (p) => String(p.topicId) === threadId || p.threadId === threadId,
     );
   }
 

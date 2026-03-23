@@ -4,7 +4,7 @@ import type { CommandsAssistantContext } from "../types.js";
 
 // Domain modules
 import { handleNew, handleNewChat, setupNewSessionCallbacks, createSessionDirect } from "./new-session.js";
-import { handleCancel, handleStatus, handleTopics, handleUsage, setupSessionCallbacks } from "./session.js";
+import { handleCancel, handleStatus, handleTopics, handleUsage, handleArchive, handleArchiveConfirm, setupSessionCallbacks } from "./session.js";
 import { handleEnableDangerous, handleDisableDangerous, handleUpdate, handleRestart } from "./admin.js";
 import { handleMenu, handleHelp, handleClear, buildMenuKeyboard } from "./menu.js";
 import { handleAgents, handleInstall, handleAgentCallback } from "./agents.js";
@@ -38,6 +38,7 @@ export function setupCommands(
   bot.command("usage", (ctx) => handleUsage(ctx, core));
   bot.command("tunnel", (ctx) => handleTunnel(ctx, core));
   bot.command("tunnels", (ctx) => handleTunnels(ctx, core));
+  bot.command("archive", (ctx) => handleArchive(ctx, core));
 }
 
 export function setupAllCallbacks(
@@ -69,6 +70,9 @@ export function setupAllCallbacks(
     await ctx.answerCallbackQuery();
     await createSessionDirect(ctx, core, chatId, agentKey, core.configManager.get().workspace.baseDir);
   });
+
+  // Archive confirmation callbacks
+  bot.callbackQuery(/^ar:/, (ctx) => handleArchiveConfirm(ctx, core, chatId));
 
   // Broad m: handler for remaining menu dispatch — LAST
   bot.callbackQuery(/^m:/, async (ctx) => {
@@ -143,4 +147,5 @@ export const STATIC_COMMANDS = [
   { command: "usage", description: "View token usage and cost report" },
   { command: "tunnel", description: "Create/stop tunnel for a local port" },
   { command: "tunnels", description: "List active tunnels" },
+  { command: "archive", description: "Archive session topic (recreate with clean history)" },
 ];

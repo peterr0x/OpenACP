@@ -230,3 +230,8 @@ export interface UsageSummary {
   sessionCount: number;
   recordCount: number;
 }
+
+export interface DiscordPlatformData {
+  threadId: string;
+  skillMsgId?: string;
+}

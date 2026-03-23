@@ -120,6 +120,26 @@ export class OpenACPCore {
     }
   }
 
+  // --- Archive ---
+
+  async archiveSession(sessionId: string): Promise<{ ok: true; newThreadId: string } | { ok: false; error: string }> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) return { ok: false, error: "Session not found" };
+    if (session.status === "initializing") return { ok: false, error: "Session is still initializing" };
+    if (session.status !== "active") return { ok: false, error: `Session is ${session.status}` };
+
+    const adapter = this.adapters.get(session.channelId);
+    if (!adapter) return { ok: false, error: "Adapter not found for session" };
+
+    try {
+      const result = await adapter.archiveSessionTopic(session.id);
+      if (!result) return { ok: false, error: "Adapter does not support archiving" };
+      return { ok: true, newThreadId: result.newThreadId };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
   // --- Message Routing ---
 
   async handleMessage(message: IncomingMessage): Promise<void> {
@@ -134,10 +154,12 @@ export class OpenACPCore {
     );
 
     // Security: check allowed user IDs
+    // Both Telegram (numeric) and Discord (snowflake string) IDs are compared as strings
     if (config.security.allowedUserIds.length > 0) {
-      if (!config.security.allowedUserIds.includes(message.userId)) {
+      const userId = String(message.userId)
+      if (!config.security.allowedUserIds.includes(userId)) {
         log.warn(
-          { userId: message.userId },
+          { userId },
           "Rejected message from unauthorized user",
         );
         return;
@@ -300,7 +322,11 @@ export class OpenACPCore {
       ...(existingRecord?.platform ?? {}),
     };
     if (session.threadId) {
-      platform.topicId = Number(session.threadId);
+      if (params.channelId === 'telegram') {
+        platform.topicId = Number(session.threadId);
+      } else {
+        platform.threadId = session.threadId;
+      }
     }
     await this.sessionManager.patchRecord(session.id, {
       sessionId: session.id,
