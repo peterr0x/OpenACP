@@ -2,6 +2,8 @@ import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { EventEmitter } from "node:events";
+import { applyMigrations } from "./config-migrations.js";
 import { createChildLogger } from "./log.js";
 const log = createChildLogger({ module: "config" });
 
@@ -69,7 +71,7 @@ export type UsageConfig = z.infer<typeof UsageSchema>;
 
 export const ConfigSchema = z.object({
   channels: z.record(z.string(), BaseChannelSchema),
-  agents: z.record(z.string(), AgentSchema),
+  agents: z.record(z.string(), AgentSchema).optional().default({}),
   defaultAgent: z.string(),
   workspace: z
     .object({
@@ -97,6 +99,10 @@ export const ConfigSchema = z.object({
     .default({}),
   tunnel: TunnelSchema,
   usage: UsageSchema,
+  integrations: z.record(z.string(), z.object({
+    installed: z.boolean(),
+    installedAt: z.string().optional(),
+  })).default({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -141,11 +147,12 @@ const DEFAULT_CONFIG = {
   usage: {},
 };
 
-export class ConfigManager {
+export class ConfigManager extends EventEmitter {
   private config!: Config;
   private configPath: string;
 
   constructor() {
+    super();
     this.configPath =
       process.env.OPENACP_CONFIG_PATH || expandHome("~/.openacp/config.json");
   }
@@ -171,43 +178,8 @@ export class ConfigManager {
     // 3. Read and parse
     const raw = JSON.parse(fs.readFileSync(this.configPath, "utf-8"));
 
-    // 3.5. Auto-migrate: add missing sections with defaults
-    let configUpdated = false;
-    if (!raw.tunnel) {
-      raw.tunnel = {
-        enabled: true,
-        port: 3100,
-        provider: "cloudflare",
-        options: {},
-        storeTtlMinutes: 60,
-        auth: { enabled: false },
-      };
-      configUpdated = true;
-      log.info("Added tunnel section to config (enabled by default with cloudflare)");
-    }
-    // 3.6. Auto-migrate: fix agent commands (claude → claude-agent-acp)
-    // The plain "claude" command is the CLI, not the ACP-compatible agent.
-    // Only "claude-agent-acp" speaks the ACP protocol correctly.
-    const AGENT_COMMAND_MIGRATIONS: Record<string, string[]> = {
-      "claude-agent-acp": ["claude", "claude-code"], // prefer claude-agent-acp over these
-    };
-    if (raw.agents && typeof raw.agents === "object") {
-      for (const [agentName, agentDef] of Object.entries(raw.agents)) {
-        const def = agentDef as { command?: string };
-        if (!def.command) continue;
-        for (const [correctCmd, legacyCmds] of Object.entries(AGENT_COMMAND_MIGRATIONS)) {
-          if (legacyCmds.includes(def.command)) {
-            log.warn(
-              { agent: agentName, oldCommand: def.command, newCommand: correctCmd },
-              `Auto-migrating agent command: "${def.command}" → "${correctCmd}"`,
-            );
-            def.command = correctCmd;
-            configUpdated = true;
-          }
-        }
-      }
-    }
-
+    // 3.5. Auto-migrate config
+    const { changed: configUpdated } = applyMigrations(raw);
     if (configUpdated) {
       fs.writeFileSync(this.configPath, JSON.stringify(raw, null, 2));
     }
@@ -234,7 +206,8 @@ export class ConfigManager {
     return this.config;
   }
 
-  async save(updates: Record<string, unknown>): Promise<void> {
+  async save(updates: Record<string, unknown>, changePath?: string): Promise<void> {
+    const oldConfig = this.config ? structuredClone(this.config) : undefined;
     // Read current file, merge updates, write back
     const raw = JSON.parse(fs.readFileSync(this.configPath, "utf-8"));
     this.deepMerge(raw, updates);
@@ -243,6 +216,13 @@ export class ConfigManager {
     const result = ConfigSchema.safeParse(raw);
     if (result.success) {
       this.config = result.data;
+    }
+    // Emit change event if path provided
+    if (changePath) {
+      const { getConfigValue } = await import('./config-registry.js')
+      const value = getConfigValue(this.config, changePath)
+      const oldValue = oldConfig ? getConfigValue(oldConfig, changePath) : undefined
+      this.emit('config:changed', { path: changePath, value, oldValue })
     }
   }
 

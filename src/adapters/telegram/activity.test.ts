@@ -183,13 +183,13 @@ describe('PlanCard', () => {
     expect(api.sendMessage).toHaveBeenCalledOnce()
   })
 
-  it('finalize() after timer-flush edits (does not double-send)', async () => {
+  it('finalize() after timer-flush skips edit when content unchanged', async () => {
     card.update(entries)
     await vi.advanceTimersByTimeAsync(3500)
     expect(api.sendMessage).toHaveBeenCalledOnce()
     await card.finalize()
-    // finalize awaits flushPromise, then does one final edit
-    expect(api.editMessageText).toHaveBeenCalledOnce()
+    // finalize skips edit because content hasn't changed since last flush
+    expect(api.editMessageText).not.toHaveBeenCalled()
   })
 
   it('finalize() is no-op when no updates were made', async () => {

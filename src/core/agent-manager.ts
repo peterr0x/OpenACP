@@ -1,24 +1,22 @@
-import type { Config } from "./config.js";
 import type { AgentDefinition } from "./types.js";
 import { AgentInstance } from "./agent-instance.js";
+import type { AgentCatalog } from "./agent-catalog.js";
 
 export class AgentManager {
-  constructor(private config: Config) {}
+  constructor(private catalog: AgentCatalog) {}
 
   getAvailableAgents(): AgentDefinition[] {
-    return Object.entries(this.config.agents).map(([name, cfg]) => ({
-      name,
-      command: cfg.command,
-      args: cfg.args,
-      workingDirectory: cfg.workingDirectory,
-      env: cfg.env,
+    const installed = this.catalog.getInstalledEntries();
+    return Object.entries(installed).map(([key, agent]) => ({
+      name: key,
+      command: agent.command,
+      args: agent.args,
+      env: agent.env,
     }));
   }
 
   getAgent(name: string): AgentDefinition | undefined {
-    const cfg = this.config.agents[name];
-    if (!cfg) return undefined;
-    return { name, ...cfg };
+    return this.catalog.resolve(name);
   }
 
   async spawn(
@@ -26,7 +24,7 @@ export class AgentManager {
     workingDirectory: string,
   ): Promise<AgentInstance> {
     const agentDef = this.getAgent(agentName);
-    if (!agentDef) throw new Error(`Agent "${agentName}" not found in config`);
+    if (!agentDef) throw new Error(`Agent "${agentName}" is not installed. Run "openacp agents install ${agentName}" to add it.`);
     return AgentInstance.spawn(agentDef, workingDirectory);
   }
 
@@ -36,7 +34,7 @@ export class AgentManager {
     agentSessionId: string,
   ): Promise<AgentInstance> {
     const agentDef = this.getAgent(agentName);
-    if (!agentDef) throw new Error(`Agent "${agentName}" not found in config`);
+    if (!agentDef) throw new Error(`Agent "${agentName}" is not installed. Run "openacp agents install ${agentName}" to add it.`);
     return AgentInstance.resume(agentDef, workingDirectory, agentSessionId);
   }
 }

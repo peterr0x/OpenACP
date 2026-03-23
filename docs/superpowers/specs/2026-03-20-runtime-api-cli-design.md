@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add an HTTP control API to the OpenACP daemon and a `openacp runtime` CLI subcommand to interact with it. This allows users to create sessions, cancel sessions, check status, and list agents from the terminal without using Telegram.
+Add an HTTP control API to the OpenACP daemon and a `openacp api` CLI subcommand to interact with it. This allows users to create sessions, cancel sessions, check status, and list agents from the terminal without using Telegram.
 
 ## Context
 
@@ -11,7 +11,7 @@ OpenACP currently manages sessions exclusively through the Telegram adapter. Bot
 ## Architecture
 
 ```
-CLI (openacp runtime new)
+CLI (openacp api new)
   → reads ~/.openacp/api.port
   → fetch("http://127.0.0.1:{port}/api/sessions", { method: "POST" })
   → daemon's HTTP server receives request
@@ -121,22 +121,22 @@ If the configured port is in use:
 - Continue without API server (daemon still works via Telegram)
 - Do NOT write `api.port` file (so CLI knows API is unavailable)
 
-## 3. CLI `runtime` Subcommand
+## 3. CLI `api` Subcommand
 
 **File:** Changes to `src/cli.ts`
 
 ### Commands
 
 ```
-openacp runtime new [agent] [--workspace path]   Create a new session
-openacp runtime cancel <session-id>               Cancel a session
-openacp runtime status                            Show active sessions
-openacp runtime agents                            List available agents
+openacp api new [agent] [--workspace path]   Create a new session
+openacp api cancel <session-id>               Cancel a session
+openacp api status                            Show active sessions
+openacp api agents                            List available agents
 ```
 
 ### Implementation
 
-Each runtime command:
+Each api command:
 1. Reads `~/.openacp/api.port` to get the port
 2. If file missing: prints "OpenACP is not running. Start with `openacp start`" and exits with code 1
 3. Uses native `fetch()` (Node 18+) to call `http://127.0.0.1:{port}/api/...`
@@ -147,38 +147,38 @@ Each runtime command:
 ### Output Format
 
 ```
-$ openacp runtime new claude
+$ openacp api new claude
 Session created
   ID     : abc123
   Agent  : claude
   Status : initializing
 
-$ openacp runtime status
+$ openacp api status
 Active sessions: 2
 
   abc123  claude  active   "Fix login bug"
   def456  claude  active   "Add dark mode"
 
-$ openacp runtime agents
+$ openacp api agents
 Available agents:
   claude (default)
   python-agent
 
-$ openacp runtime cancel abc123
+$ openacp api cancel abc123
 Session abc123 cancelled
 ```
 
 ### Unknown Subcommand
 
 ```
-$ openacp runtime foo
-Unknown runtime command: foo
+$ openacp api foo
+Unknown api command: foo
 
 Usage:
-  openacp runtime new [agent]         Create a new session
-  openacp runtime cancel <id>         Cancel a session
-  openacp runtime status              Show active sessions
-  openacp runtime agents              List available agents
+  openacp api new [agent]         Create a new session
+  openacp api cancel <id>         Cancel a session
+  openacp api status              Show active sessions
+  openacp api agents              List available agents
 ```
 
 ## 4. Integration Changes
@@ -203,13 +203,13 @@ await apiServer.stop()
 Add to `printHelp()`:
 ```
 Runtime (requires running daemon):
-  openacp runtime new [agent]         Create a new session
-  openacp runtime cancel <id>         Cancel a session
-  openacp runtime status              Show active sessions
-  openacp runtime agents              List available agents
+  openacp api new [agent]         Create a new session
+  openacp api cancel <id>         Cancel a session
+  openacp api status              Show active sessions
+  openacp api agents              List available agents
 
 Note: "openacp status" shows daemon process health.
-      "openacp runtime status" shows active agent sessions.
+      "openacp api status" shows active agent sessions.
 ```
 
 ### Config Editor
@@ -240,7 +240,7 @@ Add `listAllSessions()` method to `SessionManager` that returns all sessions acr
 ## 6. Testing Strategy
 
 - **Unit tests** for API server: mock `OpenACPCore`, test each endpoint returns correct JSON and status codes
-- **Unit tests** for CLI runtime commands: mock `fetch()`, test output formatting and error handling
+- **Unit tests** for CLI api commands: mock `fetch()`, test output formatting and error handling
 - **Port file** tests: write/read/cleanup lifecycle
 - **Port conflict** test: verify daemon continues without API when port is busy, and `api.port` file is NOT written
 - **Stale port file** test: verify CLI removes `api.port` on connection refused

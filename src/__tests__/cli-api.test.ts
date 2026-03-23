@@ -8,7 +8,7 @@ describe('api-client', () => {
   let portFile: string
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openacp-cli-runtime-'))
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openacp-cli-api-'))
     portFile = path.join(tmpDir, 'api.port')
   })
 

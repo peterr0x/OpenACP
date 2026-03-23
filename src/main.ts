@@ -6,7 +6,9 @@ import { loadAdapterFactory } from './core/plugin-manager.js'
 import { initLogger, shutdownLogger, cleanupOldSessionLogs, log } from './core/log.js'
 import { TelegramAdapter } from './adapters/telegram/index.js'
 import { ApiServer } from './core/api-server.js'
+import { TopicManager } from './core/topic-manager.js'
 
+export const RESTART_EXIT_CODE = 75
 let shuttingDown = false
 
 export async function startServer() {
@@ -99,10 +101,10 @@ export async function startServer() {
   // 5. Start
   let apiServer: ApiServer | undefined
 
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
     shuttingDown = true
-    log.info({ signal }, 'Signal received, shutting down')
+    log.info({ signal, exitCode }, 'Signal received, shutting down')
 
     try {
       if (apiServer) await apiServer.stop()
@@ -112,15 +114,58 @@ export async function startServer() {
       log.error({ err }, 'Error during shutdown')
     }
 
+    const isDaemon = process.argv.includes('--daemon-child')
+
     // Clean up PID file if running as daemon
-    if (process.argv.includes('--daemon-child')) {
+    if (isDaemon) {
       const { removePidFile, getPidPath } = await import('./core/daemon.js')
       removePidFile(getPidPath())
     }
 
+    // Self-respawn on restart
+    if (exitCode === RESTART_EXIT_CODE) {
+      if (isDaemon) {
+        // Daemon mode: spawn detached child writing to log file
+        const { spawn: spawnChild } = await import('node:child_process')
+        const { expandHome } = await import('./core/config.js')
+        const fs = await import('node:fs')
+        const pathMod = await import('node:path')
+
+        const cliPath = pathMod.resolve(process.argv[1])
+        const resolvedLogDir = expandHome(config.logging.logDir)
+        fs.mkdirSync(resolvedLogDir, { recursive: true })
+        const logFile = pathMod.join(resolvedLogDir, 'openacp.log')
+        const out = fs.openSync(logFile, 'a')
+        const err = fs.openSync(logFile, 'a')
+
+        const child = spawnChild(process.execPath, [cliPath, '--daemon-child'], {
+          detached: true,
+          stdio: ['ignore', out, err],
+          env: { ...process.env, OPENACP_SKIP_UPDATE_CHECK: '1' },
+        })
+        fs.closeSync(out)
+        fs.closeSync(err)
+        child.unref()
+        log.info({ newPid: child.pid }, 'Respawned daemon for restart')
+      } else if (!process.env.OPENACP_DEV_LOOP) {
+        // Foreground production mode: spawn replacement process with inherited stdio
+        const { spawn: spawnChild } = await import('node:child_process')
+        const child = spawnChild(process.execPath, process.argv.slice(1), {
+          stdio: 'inherit',
+          env: { ...process.env, OPENACP_SKIP_UPDATE_CHECK: '1' },
+        })
+        await shutdownLogger()
+        child.on('exit', (code) => process.exit(code ?? 0))
+        return
+      }
+    }
+
     await shutdownLogger()
-    process.exit(0)
+    process.exit(exitCode)
   }
+
+  // Expose restart trigger for adapters (e.g. /restart command)
+  core.requestRestart = () => shutdown('restart', RESTART_EXIT_CODE)
 
   process.on('SIGINT', () => shutdown('SIGINT'))
   process.on('SIGTERM', () => shutdown('SIGTERM'))
@@ -135,7 +180,19 @@ export async function startServer() {
 
   await core.start()
 
-  apiServer = new ApiServer(core, config.api)
+  const updatedConfig = core.configManager.get()
+  const telegramAdapter = core.adapters.get('telegram') ?? null
+  const telegramCfg = updatedConfig.channels?.telegram as any
+  const topicManager = new TopicManager(
+    core.sessionManager,
+    telegramAdapter,
+    {
+      notificationTopicId: telegramCfg?.notificationTopicId ?? null,
+      assistantTopicId: telegramCfg?.assistantTopicId ?? null,
+    },
+  )
+
+  apiServer = new ApiServer(core, config.api, undefined, topicManager)
   await apiServer.start()
 
   // 6. Log ready

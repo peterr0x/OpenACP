@@ -171,6 +171,7 @@ export class PlanCard {
   private msgId?: number
   private flushPromise: Promise<void> = Promise.resolve()
   private latestEntries?: PlanEntry[]
+  private lastSentText?: string
   private flushTimer?: ReturnType<typeof setTimeout>
 
   constructor(
@@ -214,6 +215,8 @@ export class PlanCard {
   private async _flush(): Promise<void> {
     if (!this.latestEntries) return
     const text = formatPlanCard(this.latestEntries)
+    if (this.msgId && text === this.lastSentText) return
+    this.lastSentText = text
     try {
       if (this.msgId) {
         await this.sendQueue.enqueue(() =>

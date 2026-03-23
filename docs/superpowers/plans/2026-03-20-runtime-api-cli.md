@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an HTTP control API to the OpenACP daemon and `openacp runtime` CLI commands to create/cancel sessions, list sessions, and list agents.
+**Goal:** Add an HTTP control API to the OpenACP daemon and `openacp api` CLI commands to create/cancel sessions, list sessions, and list agents.
 
 **Architecture:** A lightweight HTTP server (`ApiServer`) using Node's native `http` module runs inside the daemon process alongside adapters. It exposes 4 JSON endpoints on localhost. The CLI reads a port file (`~/.openacp/api.port`) to discover the server and uses `fetch()` to call it.
 
@@ -21,13 +21,13 @@
 | `src/core/config.ts` | **Modify:** Add `api` section to ConfigSchema + env override |
 | `src/core/api-server.ts` | **Create:** HTTP server class with 4 endpoints, port file management |
 | `src/core/api-client.ts` | **Create:** CLI utility for reading port file and calling API |
-| `src/cli.ts` | **Modify:** Add `runtime` subcommand handler + help text |
+| `src/cli.ts` | **Modify:** Add `api` subcommand handler + help text |
 | `src/main.ts` | **Modify:** Start/stop ApiServer in server lifecycle |
 | `src/core/config-editor.ts` | **Modify:** Add API section to config editor menu |
 | `src/core/index.ts` | **Modify:** Export ApiServer |
 | `src/__tests__/config-schema.test.ts` | **Modify:** Add api config tests |
 | `src/__tests__/api-server.test.ts` | **Create:** Unit tests for API server endpoints |
-| `src/__tests__/cli-runtime.test.ts` | **Create:** Unit tests for CLI runtime commands |
+| `src/__tests__/cli-api.test.ts` | **Create:** Unit tests for CLI api commands |
 
 ---
 
@@ -551,17 +551,17 @@ git commit -m "feat(api): add HTTP API server with session and agent endpoints"
 
 ---
 
-### Task 3: CLI `runtime` subcommand + api-client
+### Task 3: CLI `api` subcommand + api-client
 
 **Prerequisite:** Task 2 must be completed (API server must exist for integration).
 
 **Files:**
 - Create: `src/core/api-client.ts`
 - Modify: `src/cli.ts:8-29` (help text)
-- Modify: `src/cli.ts` (add runtime handler before `start` command)
-- Create: `src/__tests__/cli-runtime.test.ts`
+- Modify: `src/cli.ts` (add api handler before `start` command)
+- Create: `src/__tests__/cli-api.test.ts`
 
-**Context:** The CLI entry point is `src/cli.ts`. Commands are handled via `if (command === '...')` blocks. The `runtime` subcommand reads `~/.openacp/api.port` to discover the daemon's API server, then uses `fetch()` to call it.
+**Context:** The CLI entry point is `src/cli.ts`. Commands are handled via `if (command === '...')` blocks. The `api` subcommand reads `~/.openacp/api.port` to discover the daemon's API server, then uses `fetch()` to call it.
 
 Key patterns from existing `cli.ts`:
 - `const args = process.argv.slice(2)` — `args[0]` is the command
@@ -571,7 +571,7 @@ Key patterns from existing `cli.ts`:
 
 - [ ] **Step 1: Write failing tests for api-client**
 
-Create `src/__tests__/cli-runtime.test.ts`:
+Create `src/__tests__/cli-api.test.ts`:
 
 ```typescript
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -584,7 +584,7 @@ describe('api-client', () => {
   let portFile: string
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openacp-cli-runtime-'))
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openacp-cli-api-'))
     portFile = path.join(tmpDir, 'api.port')
   })
 
@@ -633,7 +633,7 @@ describe('api-client', () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm test -- src/__tests__/cli-runtime.test.ts`
+Run: `pnpm test -- src/__tests__/cli-api.test.ts`
 Expected: FAIL — module `../core/api-client.js` not found
 
 - [ ] **Step 3: Create api-client module**
@@ -676,10 +676,10 @@ export async function apiCall(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm test -- src/__tests__/cli-runtime.test.ts`
+Run: `pnpm test -- src/__tests__/cli-api.test.ts`
 Expected: ALL PASS
 
-- [ ] **Step 5: Add `runtime` command handler to cli.ts**
+- [ ] **Step 5: Add `api` command handler to cli.ts**
 
 In `src/cli.ts`, add after the existing imports (line 3):
 
@@ -691,19 +691,19 @@ Update `printHelp()` — insert before the `Install:` section:
 
 ```
 Runtime (requires running daemon):
-  openacp runtime new [agent]       Create a new session
-  openacp runtime cancel <id>       Cancel a session
-  openacp runtime status            Show active sessions
-  openacp runtime agents            List available agents
+  openacp api new [agent]       Create a new session
+  openacp api cancel <id>       Cancel a session
+  openacp api status            Show active sessions
+  openacp api agents            List available agents
 
 Note: "openacp status" shows daemon process health.
-      "openacp runtime status" shows active agent sessions.
+      "openacp api status" shows active agent sessions.
 ```
 
-Add the `runtime` command handler — insert BEFORE the `if (command === 'start')` block:
+Add the `api` command handler — insert BEFORE the `if (command === 'start')` block:
 
 ```typescript
-  if (command === 'runtime') {
+  if (command === 'api') {
     const subCmd = args[1]
 
     const port = readApiPort()
@@ -739,7 +739,7 @@ Add the `runtime` command handler — insert BEFORE the `if (command === 'start'
       } else if (subCmd === 'cancel') {
         const sessionId = args[2]
         if (!sessionId) {
-          console.error('Usage: openacp runtime cancel <session-id>')
+          console.error('Usage: openacp api cancel <session-id>')
           process.exit(1)
         }
         const res = await apiCall(port, `/api/sessions/${encodeURIComponent(sessionId)}`, {
@@ -775,12 +775,12 @@ Add the `runtime` command handler — insert BEFORE the `if (command === 'start'
         }
 
       } else {
-        console.error(`Unknown runtime command: ${subCmd || '(none)'}\n`)
+        console.error(`Unknown api command: ${subCmd || '(none)'}\n`)
         console.log('Usage:')
-        console.log('  openacp runtime new [agent]         Create a new session')
-        console.log('  openacp runtime cancel <id>         Cancel a session')
-        console.log('  openacp runtime status              Show active sessions')
-        console.log('  openacp runtime agents              List available agents')
+        console.log('  openacp api new [agent]         Create a new session')
+        console.log('  openacp api cancel <id>         Cancel a session')
+        console.log('  openacp api status              Show active sessions')
+        console.log('  openacp api agents              List available agents')
         process.exit(1)
       }
     } catch (err) {
@@ -803,8 +803,8 @@ Expected: ALL PASS, build clean
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/core/api-client.ts src/__tests__/cli-runtime.test.ts src/cli.ts
-git commit -m "feat(cli): add runtime subcommand for session and agent management"
+git add src/core/api-client.ts src/__tests__/cli-api.test.ts src/cli.ts
+git commit -m "feat(cli): add api subcommand for session and agent management"
 ```
 
 ---
@@ -970,7 +970,7 @@ Expected: Clean build, no errors
 
 - [ ] **Step 3: Verify test count**
 
-Check output shows tests from `api-server.test.ts` (11 tests) and `cli-runtime.test.ts` (4 tests) running alongside existing tests.
+Check output shows tests from `api-server.test.ts` (11 tests) and `cli-api.test.ts` (4 tests) running alongside existing tests.
 
 - [ ] **Step 4: Final commit (if any fixes needed)**
 

@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { input, select } from "@inquirer/prompts";
 import type { Config, ConfigManager } from "./config.js";
 import { expandHome } from "./config.js";
+import { commandExists } from "./agent-dependencies.js";
 
 // --- ANSI colors ---
 
@@ -291,25 +290,6 @@ const KNOWN_AGENTS: Array<{ name: string; commands: string[] }> = [
   { name: "codex", commands: ["codex"] },
 ];
 
-function commandExists(cmd: string): boolean {
-  try {
-    execFileSync("which", [cmd], { stdio: "pipe" });
-    return true;
-  } catch {
-    // not in PATH
-  }
-  // Check node_modules/.bin (walks up from cwd)
-  let dir = process.cwd();
-  while (true) {
-    const binPath = path.join(dir, "node_modules", ".bin", cmd);
-    if (fs.existsSync(binPath)) return true;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return false;
-}
-
 export async function detectAgents(): Promise<
   Array<{ name: string; command: string }>
 > {
@@ -420,29 +400,98 @@ export async function setupTelegram(): Promise<Config["channels"][string]> {
 }
 
 export async function setupAgents(): Promise<{
-  agents: Config["agents"];
   defaultAgent: string;
 }> {
-  const detected = await detectAgents();
-  const agents: Config["agents"] = {};
+  const { AgentCatalog } = await import("./agent-catalog.js");
+  const { select, checkbox } = await import("@inquirer/prompts");
 
-  // claude-agent-acp is always bundled, so always include it
-  agents["claude"] = { command: "claude-agent-acp", args: [], env: {} };
+  const catalog = new AgentCatalog();
+  catalog.load();
 
-  // Add any other detected agents (e.g. codex)
-  for (const agent of detected) {
-    if (agent.name !== "claude") {
-      agents[agent.name] = { command: agent.command, args: [], env: {} };
+  console.log(dim("  Checking available agents..."));
+  await catalog.refreshRegistryIfStale();
+
+  // Claude is always pre-installed (bundled dependency)
+  if (!catalog.getInstalledAgent("claude")) {
+    const claudeRegistry = catalog.findRegistryAgent("claude-acp");
+    if (claudeRegistry) {
+      await catalog.install("claude-acp");
+    } else {
+      // Fallback: register bundled claude-agent-acp directly
+      const { AgentStore } = await import("./agent-store.js");
+      const store = new AgentStore();
+      store.load();
+      store.addAgent("claude", {
+        registryId: "claude-acp",
+        name: "Claude Agent",
+        version: "bundled",
+        distribution: "npx",
+        command: "npx",
+        args: ["@zed-industries/claude-agent-acp"],
+        env: {},
+        installedAt: new Date().toISOString(),
+        binaryPath: null,
+      });
+    }
+  }
+  console.log(ok("Claude Agent ready"));
+
+  const available = catalog.getAvailable();
+  const installed = available.filter((a) => a.installed);
+  const installable = available.filter((a) => !a.installed && a.available);
+
+  // Offer agent selection — show installed agents as pre-checked + disabled
+  if (installed.length > 0 || installable.length > 0) {
+    const choices = [
+      ...installed.map((a) => ({
+        name: `${a.name} (installed)`,
+        value: a.key,
+        checked: true,
+        disabled: "(already installed)",
+      })),
+      ...installable.slice(0, 10).map((a) => ({
+        name: `${a.name} (${a.distribution})`,
+        value: a.key,
+        checked: false,
+      })),
+    ];
+
+    const selected = await checkbox({
+      message: "Install additional agents? (Space to select, Enter to continue)",
+      choices,
+    });
+
+    for (const key of selected) {
+      const regAgent = catalog.findRegistryAgent(key);
+      if (regAgent) {
+        process.stdout.write(`  Installing ${regAgent.name}... `);
+        const result = await catalog.install(key);
+        if (result.ok) {
+          console.log(ok("done"));
+        } else {
+          console.log(warn(`skipped: ${result.error}`));
+        }
+      }
     }
   }
 
-  const defaultAgent = Object.keys(agents)[0];
-  const agentCmd = agents[defaultAgent].command;
-  console.log(
-    ok(`Agent: ${c.bold}${defaultAgent}${c.reset}${c.green} (${agentCmd})`),
-  );
+  // Choose default agent
+  const installedAgents = Object.keys(catalog.getInstalledEntries());
+  let defaultAgent = "claude";
 
-  return { agents, defaultAgent };
+  if (installedAgents.length > 1) {
+    defaultAgent = await select({
+      message: "Which agent should be the default?",
+      choices: installedAgents.map((key) => {
+        const agent = catalog.getInstalledAgent(key)!;
+        return { name: `${agent.name} (${key})`, value: key };
+      }),
+      default: "claude",
+    });
+  }
+
+  console.log(ok(`Default agent: ${c.bold}${defaultAgent}${c.reset}`));
+  return { defaultAgent };
 }
 
 export async function setupWorkspace(): Promise<{ baseDir: string }> {
@@ -514,7 +563,34 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
 
   try {
     const telegram = await setupTelegram();
-    const { agents, defaultAgent } = await setupAgents();
+    const { defaultAgent } = await setupAgents();
+
+    // Offer Claude CLI integration
+    {
+      const { confirm } = await import("@inquirer/prompts");
+      const installClaude = await confirm({
+        message: "Install session transfer for Claude? (enables /openacp:handoff in your terminal)",
+        default: true,
+      });
+
+      if (installClaude) {
+        try {
+          const { getIntegration } = await import("../cli/integrate.js");
+          const integration = getIntegration("claude");
+          if (integration) {
+            for (const item of integration.items) {
+              const result = await item.install();
+              for (const log of result.logs) console.log(`  ${log}`);
+            }
+          }
+          console.log("Claude CLI integration installed.\n");
+        } catch (err) {
+          console.log(`Could not install Claude CLI integration: ${err instanceof Error ? err.message : err}`);
+          console.log("  You can install it later with: openacp integrate claude\n");
+        }
+      }
+    }
+
     const workspace = await setupWorkspace();
     const { runMode, autoStart } = await setupRunMode();
     const security = {
@@ -525,7 +601,7 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
 
     const config: Config = {
       channels: { telegram },
-      agents,
+      agents: {},
       defaultAgent,
       workspace,
       security,
@@ -557,6 +633,7 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
         currency: "USD",
         retentionDays: 90,
       },
+      integrations: {},
     };
 
     try {
