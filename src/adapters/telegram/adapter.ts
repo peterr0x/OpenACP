@@ -367,6 +367,7 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
   private setupRoutes(): void {
     this.bot.on("message:text", async (ctx) => {
       const threadId = ctx.message.message_thread_id;
+      const text = ctx.message.text;
 
       // Check for pending workspace input from interactive /new flow
       if (await handlePendingWorkspaceInput(ctx, this.core, this.telegramConfig.chatId, this.assistantTopicId)) {
@@ -386,6 +387,11 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
       // Notification topic → ignore
       if (threadId === this.notificationTopicId) return;
 
+      // Strip leading "/" from unrecognized commands — registered commands
+      // (e.g. /new, /cancel) are already handled by bot.command() above.
+      // Unrecognized slash commands can cause agent subprocesses to hang.
+      const forwardText = text.startsWith("/") ? text.slice(1) : text;
+
       // Assistant topic → forward to assistant session
       if (threadId === this.assistantTopicId) {
         if (!this.assistantSession) {
@@ -394,7 +400,7 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
         }
         await this.draftManager.finalize(this.assistantSession.id, this.assistantSession.id);
         ctx.replyWithChatAction("typing").catch(() => {});
-        handleAssistantMessage(this.assistantSession, ctx.message.text).catch(
+        handleAssistantMessage(this.assistantSession, forwardText).catch(
           (err) => log.error({ err }, "Assistant error"),
         );
         return;
@@ -413,7 +419,7 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
           channelId: "telegram",
           threadId: String(threadId),
           userId: String(ctx.from.id),
-          text: ctx.message.text,
+          text: forwardText,
         })
         .catch((err) => log.error({ err }, "handleMessage error"));
     });
@@ -854,7 +860,8 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
     const sessionId = this.resolveSessionId(threadId) || "unknown";
     const att = await this.fileService.saveFile(sessionId, fileName, buffer, mimeType);
 
-    const text = caption || `[${att.type === "image" ? "Photo" : att.type === "audio" ? "Audio" : "File"}: ${att.fileName}]`;
+    const rawText = caption || `[${att.type === "image" ? "Photo" : att.type === "audio" ? "Audio" : "File"}: ${att.fileName}]`;
+    const text = rawText.startsWith("/") ? rawText.slice(1) : rawText;
 
     // Assistant topic
     if (threadId === this.assistantTopicId) {

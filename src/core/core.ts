@@ -277,6 +277,22 @@ export class OpenACPCore {
       });
     }
 
+    // 5c. Clean up user tunnels when session ends
+    session.on("status_change", (_from, to) => {
+      if ((to === "finished" || to === "cancelled") && this._tunnelService) {
+        this._tunnelService.stopBySession(session.id).then(stopped => {
+          for (const entry of stopped) {
+            this.notificationManager.notifyAll({
+              sessionId: session.id,
+              sessionName: session.name,
+              type: "completed",
+              summary: `Tunnel stopped: port ${entry.port}${entry.label ? ` (${entry.label})` : ''} — session ended`,
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+    });
+
     // 6. Persist initial record
     // Preserve existing platform data (e.g. topicId) when resuming an existing session
     const existingRecord = this.sessionStore?.get(session.id);
@@ -472,11 +488,11 @@ export class OpenACPCore {
       return null;
     }
 
-    // Don't resume cancelled/error sessions
-    if (record.status === "cancelled" || record.status === "error") {
+    // Don't resume errored sessions (cancelled sessions can still be resumed)
+    if (record.status === "error") {
       log.debug(
         { threadId: message.threadId, sessionId: record.sessionId, status: record.status },
-        "Skipping resume of cancelled/error session",
+        "Skipping resume of error session",
       );
       return null;
     }

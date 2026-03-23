@@ -31,18 +31,18 @@ export async function handleCancel(
     String(threadId),
   );
   if (session) {
-    log.info({ sessionId: session.id }, "Cancel session command");
+    log.info({ sessionId: session.id }, "Abort prompt command");
     await session.abortPrompt();
-    await ctx.reply("⛔ Session cancelled.", { parse_mode: "HTML" });
+    await ctx.reply("⛔ Prompt aborted. Session is still active — send a new message to continue.", { parse_mode: "HTML" });
     return;
   }
 
-  // Fallback: cancel from store when session not in memory (e.g. after restart)
+  // Fallback: session not in memory — nothing to abort, but session can
+  // still be resumed when the user sends a new message.
   const record = core.sessionManager.getRecordByThread("telegram", String(threadId));
-  if (record && record.status !== "cancelled" && record.status !== "error") {
-    log.info({ sessionId: record.sessionId }, "Cancel session command (from store)");
-    await core.sessionManager.cancelSession(record.sessionId);
-    await ctx.reply("⛔ Session cancelled.", { parse_mode: "HTML" });
+  if (record && record.status !== "error") {
+    log.info({ sessionId: record.sessionId, status: record.status }, "Cancel command — no active prompt to abort");
+    await ctx.reply("ℹ️ No active prompt to cancel. Send a new message to resume the session.", { parse_mode: "HTML" });
   }
 }
 
