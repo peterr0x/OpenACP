@@ -7,12 +7,16 @@ import { NotificationManager } from "./notification.js";
 import { ChannelAdapter } from "./channel.js";
 import { Session } from "./session.js";
 import { JsonFileSessionStore, type SessionStore } from "./session-store.js";
+import { UsageStore } from "./usage-store.js";
+import { UsageBudget } from "./usage-budget.js";
 import type {
   IncomingMessage,
   AgentEvent,
   OutgoingMessage,
   PermissionRequest,
+  UsageRecord,
 } from "./types.js";
+import { nanoid } from "nanoid";
 import type { TunnelService } from "../tunnel/tunnel-service.js";
 import { extractFileInfo } from "../tunnel/extract-file-info.js";
 import { createChildLogger } from "./log.js";
@@ -27,6 +31,8 @@ export class OpenACPCore {
   tunnelService?: TunnelService;
   private sessionStore: SessionStore | null = null;
   private resumeLocks: Map<string, Promise<Session | null>> = new Map();
+  usageStore: UsageStore | null = null;
+  usageBudget: UsageBudget | null = null;
 
   constructor(configManager: ConfigManager) {
     this.configManager = configManager;
@@ -39,6 +45,14 @@ export class OpenACPCore {
     );
     this.sessionManager = new SessionManager(this.sessionStore);
     this.notificationManager = new NotificationManager(this.adapters);
+
+    // Usage tracking
+    const usageConfig = config.usage;
+    if (usageConfig.enabled) {
+      const usagePath = path.join(os.homedir(), ".openacp", "usage.json");
+      this.usageStore = new UsageStore(usagePath, usageConfig.retentionDays);
+      this.usageBudget = new UsageBudget(this.usageStore, usageConfig);
+    }
   }
 
   registerAdapter(name: string, adapter: ChannelAdapter): void {
@@ -69,6 +83,11 @@ export class OpenACPCore {
     // 3. Stop adapters
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
+    }
+
+    // 4. Cleanup usage store
+    if (this.usageStore) {
+      this.usageStore.destroy();
     }
   }
 
@@ -389,11 +408,42 @@ export class OpenACPCore {
         case "tool_call":
         case "tool_update":
         case "plan":
+          adapter.sendMessage(
+            session.id,
+            this.toOutgoingMessage(event, session),
+          );
+          break;
+
         case "usage":
           adapter.sendMessage(
             session.id,
             this.toOutgoingMessage(event, session),
           );
+          // Persist usage and check budget
+          if (this.usageStore) {
+            const record: UsageRecord = {
+              id: nanoid(),
+              sessionId: session.id,
+              agentName: session.agentName,
+              tokensUsed: event.tokensUsed ?? 0,
+              contextSize: event.contextSize ?? 0,
+              cost: event.cost,
+              timestamp: new Date().toISOString(),
+            };
+            this.usageStore.append(record);
+
+            if (this.usageBudget) {
+              const result = this.usageBudget.check();
+              if (result.message) {
+                this.notificationManager.notifyAll({
+                  sessionId: session.id,
+                  sessionName: session.name,
+                  type: "budget_warning",
+                  summary: result.message,
+                });
+              }
+            }
+          }
           break;
 
         case "session_end":

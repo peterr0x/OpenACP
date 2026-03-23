@@ -2,7 +2,7 @@ import type { Bot, Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import type { OpenACPCore } from "../../core/index.js";
 import type { Session } from "../../core/session.js";
-import { escapeHtml } from "./formatting.js";
+import { escapeHtml, formatUsageReport } from "./formatting.js";
 import { createSessionTopic, renameSessionTopic } from "./topics.js";
 import { createChildLogger } from "../../core/log.js";
 import { nanoid } from "nanoid";
@@ -29,6 +29,7 @@ export function setupCommands(
   bot.command("menu", (ctx) => handleMenu(ctx));
   bot.command("enable_dangerous", (ctx) => handleEnableDangerous(ctx, core));
   bot.command("disable_dangerous", (ctx) => handleDisableDangerous(ctx, core));
+  bot.command("usage", (ctx) => handleUsage(ctx, core));
 }
 
 export function buildMenuKeyboard(): InlineKeyboard {
@@ -459,6 +460,36 @@ async function handleDisableDangerous(ctx: Context, core: OpenACPCore): Promise<
   await ctx.reply("🔐 <b>Dangerous mode disabled</b>\n\nPermission requests will be shown normally.", { parse_mode: "HTML" });
 }
 
+async function handleUsage(ctx: Context, core: OpenACPCore): Promise<void> {
+  if (!core.usageStore) {
+    await ctx.reply("📊 Usage tracking is disabled.", { parse_mode: "HTML" });
+    return;
+  }
+
+  const rawMatch = (ctx as Context & { match: unknown }).match;
+  const period = typeof rawMatch === "string" ? rawMatch.trim().toLowerCase() : "";
+
+  let summaries: ReturnType<typeof core.usageStore.query>[];
+
+  if (period === "today" || period === "week" || period === "month") {
+    summaries = [core.usageStore.query(period)];
+  } else {
+    // Default: show all periods (month → week → today)
+    summaries = [
+      core.usageStore.query("month"),
+      core.usageStore.query("week"),
+      core.usageStore.query("today"),
+    ];
+  }
+
+  const budgetStatus = core.usageBudget
+    ? core.usageBudget.getStatus()
+    : { status: "ok" as const, used: 0, budget: 0, percent: 0 };
+
+  const text = formatUsageReport(summaries, budgetStatus);
+  await ctx.reply(text, { parse_mode: "HTML" });
+}
+
 // grammy's Context exposes .api (the bot's Api instance) and internally the bot
 // We need access to the bot instance for createSessionTopic (which uses bot.api.createForumTopic).
 // ctx.api is the same Api object as bot.api, so we can pass a minimal shim.
@@ -594,4 +625,5 @@ export const STATIC_COMMANDS = [
   { command: "menu", description: "Show menu" },
   { command: "enable_dangerous", description: "Auto-approve all permission requests (session only)" },
   { command: "disable_dangerous", description: "Restore normal permission prompts (session only)" },
+  { command: "usage", description: "View token usage and cost report" },
 ];

@@ -551,6 +551,12 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
         storeTtlMinutes: 60,
         auth: { enabled: false },
       },
+      usage: {
+        enabled: true,
+        warningThreshold: 0.8,
+        currency: "USD",
+        retentionDays: 90,
+      },
     };
 
     try {

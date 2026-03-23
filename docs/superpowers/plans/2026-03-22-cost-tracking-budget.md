@@ -20,28 +20,26 @@
 | Create | `src/core/usage-budget.ts` | `UsageBudget` class — threshold checking, de-duplication |
 | Create | `src/__tests__/usage-store.test.ts` | Unit tests for `UsageStore` |
 | Create | `src/__tests__/usage-budget.test.ts` | Unit tests for `UsageBudget` |
-| Modify | `src/core/types.ts:34-40` | Add `'budget_warning'` to `NotificationMessage.type` union |
-| Modify | `src/core/config.ts:58-87` | Add `usage` section to `ConfigSchema` |
-| Modify | `src/core/config.ts:98-128` | Add `usage: {}` to `DEFAULT_CONFIG` |
-| Modify | `src/core/core.ts:1-42` | Import UsageStore/UsageBudget, create in constructor |
-| Modify | `src/core/core.ts:381-435` | Wire usage event to store + budget check in `wireSessionEvents()` |
-| Modify | `src/core/core.ts:54-73` | Call `usageStore.destroy()` in `stop()` |
+| Modify | `src/core/types.ts` | Add `'budget_warning'` to `NotificationMessage.type` union |
+| Modify | `src/core/config.ts` | Add `UsageSchema` + `usage` field to `ConfigSchema` and `DEFAULT_CONFIG` |
+| Modify | `src/core/core.ts` | Import UsageStore/UsageBudget, create in constructor, wire events, destroy in `stop()` |
 | Modify | `src/core/index.ts` | Export `UsageStore` and `UsageBudget` |
-| Modify | `src/adapters/telegram/commands.ts:17-32` | Add `/usage` command handler |
-| Modify | `src/adapters/telegram/commands.ts:587-597` | Add `usage` to `STATIC_COMMANDS` |
+| Modify | `src/adapters/telegram/commands.ts` | Add `/usage` command handler + `STATIC_COMMANDS` entry |
 | Modify | `src/adapters/telegram/formatting.ts` | Add `formatUsageReport()` helper |
 | Create | `src/__tests__/usage-command.test.ts` | Unit tests for `/usage` formatting |
+
+> **Note on line numbers:** This plan uses code pattern matching (e.g., "after the TunnelSchema block") instead of hardcoded line numbers, which can drift as the codebase evolves. Always search for the referenced code pattern to find the correct insertion point.
 
 ---
 
 ### Task 1: UsageRecord and UsageSummary Types
 
 **Files:**
-- Modify: `src/core/types.ts:34-40`
+- Modify: `src/core/types.ts`
 
 - [ ] **Step 1: Add `'budget_warning'` to NotificationMessage type union**
 
-In `src/core/types.ts`, find the `NotificationMessage` interface (line 34) and add `'budget_warning'` to the type union:
+In `src/core/types.ts`, find the `NotificationMessage` interface and add `'budget_warning'` to the `type` union:
 
 ```typescript
 export interface NotificationMessage {
@@ -55,7 +53,7 @@ export interface NotificationMessage {
 
 - [ ] **Step 2: Add UsageRecord and UsageSummary types**
 
-Append at the end of `src/core/types.ts`:
+Append at the end of `src/core/types.ts`. **Do NOT add `UsageBudgetConfig` here** — this type is derived from the Zod schema in `config.ts` (Task 4) to avoid duplication:
 
 ```typescript
 export interface UsageRecord {
@@ -76,14 +74,6 @@ export interface UsageSummary {
   sessionCount: number;
   recordCount: number;
 }
-
-export interface UsageBudgetConfig {
-  enabled: boolean;
-  monthlyBudget?: number;
-  warningThreshold: number;
-  currency: string;
-  retentionDays: number;
-}
 ```
 
 - [ ] **Step 3: Verify build**
@@ -95,7 +85,7 @@ Expected: No errors
 
 ```bash
 git add src/core/types.ts
-git commit -m "feat(types): add UsageRecord, UsageSummary, UsageBudgetConfig types and budget_warning notification"
+git commit -m "feat(types): add UsageRecord, UsageSummary types and budget_warning notification"
 ```
 
 ---
@@ -195,12 +185,13 @@ describe("UsageStore", () => {
     expect(summary.recordCount).toBe(1);
   });
 
-  it("filters by month", () => {
+  it("filters by month (current calendar month)", () => {
     const now = new Date();
-    const twoMonthsAgo = new Date(now);
-    twoMonthsAgo.setDate(twoMonthsAgo.getDate() - 60);
+    const lastMonth = new Date(now);
+    lastMonth.setMonth(lastMonth.getMonth() - 1);
+    lastMonth.setDate(15);
 
-    store.append(makeRecord({ id: "r1", timestamp: twoMonthsAgo.toISOString(), tokensUsed: 500 }));
+    store.append(makeRecord({ id: "r1", timestamp: lastMonth.toISOString(), tokensUsed: 500 }));
     store.append(makeRecord({ id: "r2", timestamp: now.toISOString(), tokensUsed: 1000 }));
 
     const summary = store.query("month");
@@ -312,7 +303,13 @@ export class UsageStore {
       24 * 60 * 60 * 1000,
     );
 
-    this.flushHandler = () => this.flushSync();
+    this.flushHandler = () => {
+      try {
+        this.flushSync();
+      } catch {
+        // Best effort — don't block other exit handlers (e.g., session store flush)
+      }
+    };
     process.on("SIGTERM", this.flushHandler);
     process.on("SIGINT", this.flushHandler);
     process.on("exit", this.flushHandler);
@@ -440,8 +437,11 @@ export class UsageStore {
       }
       case "week":
         return Date.now() - 7 * 24 * 60 * 60 * 1000;
-      case "month":
-        return Date.now() - 30 * 24 * 60 * 60 * 1000;
+      case "month": {
+        // Use current calendar month (1st of month), consistent with getMonthlyTotal()
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        return startOfMonth.getTime();
+      }
       case "all":
         return null;
     }
@@ -487,7 +487,8 @@ import path from "node:path";
 import os from "node:os";
 import { UsageStore } from "../core/usage-store.js";
 import { UsageBudget } from "../core/usage-budget.js";
-import type { UsageBudgetConfig, UsageRecord } from "../core/types.js";
+import type { UsageConfig } from "../core/config.js";
+import type { UsageRecord } from "../core/types.js";
 
 function makeRecord(overrides: Partial<UsageRecord> = {}): UsageRecord {
   return {
@@ -505,7 +506,7 @@ function makeRecord(overrides: Partial<UsageRecord> = {}): UsageRecord {
 describe("UsageBudget", () => {
   let tmpDir: string;
   let store: UsageStore;
-  let config: UsageBudgetConfig;
+  let config: UsageConfig;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openacp-budget-test-"));
@@ -595,13 +596,19 @@ describe("UsageBudget", () => {
 
   it("resets de-duplication at month boundary", () => {
     store.append(makeRecord({ cost: { amount: 8.5, currency: "USD" } }));
-    const budget = new UsageBudget(store, config);
+
+    // Use injectable date provider to simulate month change
+    let currentDate = new Date();
+    const budget = new UsageBudget(store, config, () => currentDate);
     const first = budget.check();
     expect(first.message).toBeDefined(); // warning sent
 
-    // Simulate month change by manipulating internal state
-    // Access private field via bracket notation for testing
-    (budget as any).lastNotifiedMonth = (new Date().getMonth() + 11) % 12; // previous month
+    const second = budget.check();
+    expect(second.message).toBeUndefined(); // de-duplicated
+
+    // Advance to next month
+    currentDate = new Date(currentDate);
+    currentDate.setMonth(currentDate.getMonth() + 1);
 
     // Cost is still above threshold, but month changed → should re-notify
     const result = budget.check();
@@ -620,17 +627,20 @@ Expected: FAIL — `UsageBudget` does not exist yet
 Create `src/core/usage-budget.ts`:
 
 ```typescript
-import type { UsageBudgetConfig } from "./types.js";
+import type { UsageConfig } from "./config.js";
 import type { UsageStore } from "./usage-store.js";
 
 export class UsageBudget {
   private lastNotifiedStatus: "ok" | "warning" | "exceeded" = "ok";
-  private lastNotifiedMonth: number = new Date().getMonth();
+  private lastNotifiedMonth: number;
 
   constructor(
     private store: UsageStore,
-    private config: UsageBudgetConfig,
-  ) {}
+    private config: UsageConfig,
+    private now: () => Date = () => new Date(),
+  ) {
+    this.lastNotifiedMonth = this.now().getMonth();
+  }
 
   check(): { status: "ok" | "warning" | "exceeded"; message?: string } {
     if (!this.config.monthlyBudget) {
@@ -638,7 +648,7 @@ export class UsageBudget {
     }
 
     // Reset de-duplication at month boundary
-    const currentMonth = new Date().getMonth();
+    const currentMonth = this.now().getMonth();
     if (currentMonth !== this.lastNotifiedMonth) {
       this.lastNotifiedStatus = "ok";
       this.lastNotifiedMonth = currentMonth;
@@ -723,12 +733,13 @@ git commit -m "feat(core): add UsageBudget with threshold checking and de-duplic
 ### Task 4: Config Schema
 
 **Files:**
-- Modify: `src/core/config.ts:58-87` (ConfigSchema)
-- Modify: `src/core/config.ts:98-128` (DEFAULT_CONFIG)
+- Modify: `src/core/config.ts`
+
+> **Single source of truth:** `UsageConfig` is derived from the Zod schema (`z.infer<typeof UsageSchema>`) and exported from `config.ts`. Do NOT define a separate `UsageBudgetConfig` interface in `types.ts` — that would create a parallel type that can drift out of sync.
 
 - [ ] **Step 1: Add UsageSchema to ConfigSchema**
 
-In `src/core/config.ts`, add the usage schema before the `ConfigSchema` definition (before line 58). Add it after the `TunnelSchema` block:
+In `src/core/config.ts`, add the usage schema after the `TunnelSchema` block (and its `export type TunnelConfig` line):
 
 ```typescript
 const UsageSchema = z
@@ -744,7 +755,7 @@ const UsageSchema = z
 export type UsageConfig = z.infer<typeof UsageSchema>;
 ```
 
-Then add `usage: UsageSchema,` to the `ConfigSchema` object (after the `tunnel` field, line 86):
+Then add `usage: UsageSchema,` to the `ConfigSchema` object, after the `tunnel` field:
 
 ```typescript
   tunnel: TunnelSchema,
@@ -753,7 +764,7 @@ Then add `usage: UsageSchema,` to the `ConfigSchema` object (after the `tunnel` 
 
 - [ ] **Step 2: Add `usage: {}` to DEFAULT_CONFIG**
 
-In `DEFAULT_CONFIG` (line 98), add after the `tunnel` block:
+In `DEFAULT_CONFIG`, add after the `tunnel` block:
 
 ```typescript
   usage: {},
@@ -781,14 +792,12 @@ git commit -m "feat(config): add usage tracking schema with budget and retention
 ### Task 5: Core Wiring
 
 **Files:**
-- Modify: `src/core/core.ts:1-42` (imports and constructor)
-- Modify: `src/core/core.ts:381-435` (wireSessionEvents)
-- Modify: `src/core/core.ts:54-73` (stop method)
-- Modify: `src/core/index.ts` (exports)
+- Modify: `src/core/core.ts`
+- Modify: `src/core/index.ts`
 
 - [ ] **Step 1: Add imports to core.ts**
 
-At the top of `src/core/core.ts`, add imports (after line 9):
+At the top of `src/core/core.ts`, add to the existing imports:
 
 ```typescript
 import { UsageStore } from "./usage-store.js";
@@ -799,14 +808,14 @@ import { nanoid } from "nanoid";
 
 - [ ] **Step 2: Add properties and constructor initialization**
 
-Add properties to `OpenACPCore` class (after `private resumeLocks` line 29):
+Add properties to the `OpenACPCore` class, after `private resumeLocks`:
 
 ```typescript
   usageStore: UsageStore | null = null;
   usageBudget: UsageBudget | null = null;
 ```
 
-Add initialization at the end of the constructor (after `this.notificationManager` line 41, before the closing `}`):
+Add initialization at the end of the constructor, after `this.notificationManager` is created:
 
 ```typescript
     // Usage tracking
@@ -820,7 +829,7 @@ Add initialization at the end of the constructor (after `this.notificationManage
 
 - [ ] **Step 3: Add usage store destroy to stop()**
 
-In the `stop()` method, add before the final `}` (after stopping adapters, around line 72):
+In the `stop()` method, add before the final `}`, after stopping adapters:
 
 ```typescript
     // 4. Cleanup usage store
@@ -831,7 +840,7 @@ In the `stop()` method, add before the final `}` (after stopping adapters, aroun
 
 - [ ] **Step 4: Wire usage event in wireSessionEvents()**
 
-In `wireSessionEvents()`, find the `case "usage":` block inside `onSessionUpdate` (around line 392). The existing code just forwards to adapter. Add usage tracking after the existing `adapter.sendMessage()` call.
+In `wireSessionEvents()`, find the switch block inside `onSessionUpdate` that handles event types. The existing code groups `"usage"` with `"text"`, `"thought"`, etc. and just calls `adapter.sendMessage()`.
 
 Replace the usage case in the switch statement. Find this block:
 
@@ -1018,7 +1027,9 @@ Expected: FAIL — `formatUsageReport` does not exist
 
 - [ ] **Step 3: Implement formatUsageReport**
 
-Add the import at the top of `src/adapters/telegram/formatting.ts` (line 1, before any existing code):
+> **Month consistency:** Both `query("month")` and `getMonthlyTotal()` now use the same calendar month definition (since the 1st of the current month). This means the budget bar percentage will always match the "This Month" cost number shown in the report.
+
+Add the import at the top of `src/adapters/telegram/formatting.ts`:
 
 ```typescript
 import type { UsageSummary } from '../../core/types.js'
@@ -1082,22 +1093,19 @@ git commit -m "feat(telegram): add formatUsageReport helper for /usage command"
 ### Task 7: Telegram /usage Command
 
 **Files:**
-- Modify: `src/adapters/telegram/commands.ts:17-32` (setupCommands)
-- Modify: `src/adapters/telegram/commands.ts:587-597` (STATIC_COMMANDS)
+- Modify: `src/adapters/telegram/commands.ts`
 
 - [ ] **Step 1: Add import for formatUsageReport**
 
-At the top of `src/adapters/telegram/commands.ts`, add:
+At the top of `src/adapters/telegram/commands.ts`, update the formatting import to include `formatUsageReport`:
 
 ```typescript
 import { escapeHtml, formatUsageReport } from "./formatting.js";
 ```
 
-(Replace the existing `import { escapeHtml } from "./formatting.js";` on line 5.)
-
 - [ ] **Step 2: Register /usage command in setupCommands**
 
-In the `setupCommands` function (line 17-32), add after the existing commands (before the closing `}`):
+In the `setupCommands` function, add after the existing `bot.command(...)` calls:
 
 ```typescript
   bot.command("usage", (ctx) => handleUsage(ctx, core));
@@ -1105,7 +1113,7 @@ In the `setupCommands` function (line 17-32), add after the existing commands (b
 
 - [ ] **Step 3: Implement handleUsage**
 
-Add the handler function after `handleDisableDangerous` (before `botFromCtx`):
+Add the handler function after the existing command handlers (e.g., after `handleDisableDangerous`):
 
 ```typescript
 async function handleUsage(ctx: Context, core: OpenACPCore): Promise<void> {
@@ -1141,7 +1149,7 @@ async function handleUsage(ctx: Context, core: OpenACPCore): Promise<void> {
 
 - [ ] **Step 4: Add to STATIC_COMMANDS**
 
-In `STATIC_COMMANDS` array (line 587), add:
+Find the `STATIC_COMMANDS` array (search for `export const STATIC_COMMANDS`) and add:
 
 ```typescript
   { command: "usage", description: "View token usage and cost report" },
