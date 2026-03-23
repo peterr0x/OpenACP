@@ -116,7 +116,7 @@ export class UsageStore {
   }
 
   destroy(): void {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    if (this.debounceTimer) this.flushSync();
     if (this.cleanupInterval) clearInterval(this.cleanupInterval);
     if (this.flushHandler) {
       process.removeListener("SIGTERM", this.flushHandler);

@@ -34,8 +34,8 @@ export class OpenACPCore {
   private _tunnelService?: TunnelService;
   private sessionStore: SessionStore | null = null;
   private resumeLocks: Map<string, Promise<Session | null>> = new Map();
-  usageStore: UsageStore | null = null;
-  usageBudget: UsageBudget | null = null;
+  readonly usageStore: UsageStore | null = null;
+  readonly usageBudget: UsageBudget | null = null;
 
   constructor(configManager: ConfigManager) {
     this.configManager = configManager;

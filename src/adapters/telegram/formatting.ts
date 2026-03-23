@@ -1,3 +1,5 @@
+import type { UsageSummary } from '../../core/types.js'
+
 export function escapeHtml(text: string | undefined | null): string {
   if (!text) return ''
   return text
@@ -175,7 +177,7 @@ const PERIOD_LABEL: Record<string, string> = {
 }
 
 export function formatUsageReport(
-  summaries: import('../../core/types.js').UsageSummary[],
+  summaries: UsageSummary[],
   budgetStatus: { status: string; used: number; budget: number; percent: number },
 ): string {
   const hasData = summaries.some((s) => s.recordCount > 0)
