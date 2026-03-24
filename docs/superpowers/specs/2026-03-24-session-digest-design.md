@@ -1,181 +1,152 @@
-# Session Digest — Design Spec
+# Session Summary — Design Spec
 
 ## Summary
 
-Auto-generate a summary of what the agent accomplished when a session ends. Store digests persistently, post rich notifications to the Notifications topic, and expose via `/digest` command + API endpoint. Gives users and teams visibility into agent work without reading full conversation logs.
+Add an on-demand `/summary` command that asks the agent to summarize the current session's work. User-initiated, not automatic — avoids context pollution, wasted tokens, and edge cases with crashed/cancelled sessions. Summary appears directly in the session topic as a regular message.
 
 ## Problem
 
-When a session completes, OpenACP posts a generic "Session X completed" notification. Users running multiple sessions lose track of what each agent did. Teams have no visibility into agent work. There's no way to review past sessions without scrolling through Telegram topics.
+Users running multiple sessions lose track of what each agent did. There's no quick way to get a recap without scrolling through long conversation history. Teams need visibility into agent work for standups and handoffs.
 
 ## Requirements
 
-- **Auto-digest on completion**: When a session ends (status → `finished`), ask the agent to summarize what was accomplished before disconnecting
-- **Persistent storage**: Store digests in `~/.openacp/digests.json` with session metadata
-- **Rich notifications**: Replace the generic "Session completed" with the actual digest summary in the Notifications topic
-- **`/digest` command**: View recent session digests in Telegram (paginated, filterable by agent)
-- **API endpoint**: `GET /api/digests` for the UI dashboard
-- **Graceful degradation**: If agent fails to summarize (timeout, error), fall back to generic message — never block session cleanup
-- **Configurable**: Can disable auto-digest in config; adjustable retention period
+- **User-initiated**: Summary only runs when user explicitly requests it — no auto-generation on session end
+- **Works mid-session**: Can request summary while session is still active (progress check)
+- **Works in session topic**: `/summary` in a session topic → agent summarizes → result displayed in that topic
+- **Completion notification with summary button**: When session ends, notification includes a `[📋 Summary]` inline button that triggers summarization
+- **No persistent store needed**: Summary is just another message in the conversation — no `digests.json`, no retention logic, no API endpoint
+- **CLI support**: `openacp session summary [id]` as a subcommand
 
 ## Non-Goals
 
-- Full conversation transcript export (future feature)
-- Digest generation for cancelled/error sessions (only `finished`)
-- AI-powered search across digests (future)
-- Daily/weekly email or scheduled digests (future enhancement)
+- Auto-summary on every session end (rejected — context pollution, cost, edge cases)
+- Persistent digest storage (unnecessary — summary is displayed in topic)
+- Summary for sessions that never had any prompts
+- AI-powered search across summaries
 
 ## Design
 
 ### Architecture
 
 ```
-Session finishes
-  → SessionBridge.onSessionEnd()
-  → Before disconnecting, inject digest prompt into agent (like autoName pattern)
-  → Capture agent's summary response
-  → Store in DigestStore
-  → Post rich notification with summary
-  → Disconnect bridge normally
+User triggers summary (button or /summary command)
+  ↓
+  ├── Active session? → prompt current agent → display response in topic
+  └── Ended session?  → display "Session has ended, summary not available"
 ```
 
-### Digest Generation (Session.ts)
+No new store. No new persistence. Summary is a regular agent response displayed in the session topic.
 
-Follows the same pattern as `autoName()`:
-1. Pause session event emitter (prevent digest output from reaching adapter)
-2. Send summary prompt to agent: *"Summarize what you accomplished in this session in 2-3 sentences. Include: key files changed, decisions made, and current status. Reply ONLY with the summary."*
-3. Capture text response (max 500 chars)
-4. Resume and continue normal cleanup
-5. Timeout after 10 seconds — fall back to generic summary
+### `/summary` Command (Telegram)
+
+```
+User in session topic types: /summary
+  → Bot sends "📋 Generating summary..." (typing indicator)
+  → Injects summary prompt into agent (pause/capture/resume pattern)
+  → Agent responds with summary
+  → Bot displays formatted summary in the session topic
+```
+
+**If session is not active:**
+```
+/summary in non-session topic → "ℹ️ Use /summary in a session topic"
+/summary in ended session     → "⚠️ Session has ended. Summary is only available for active sessions."
+```
+
+### Summary Prompt
+
+```
+Summarize what you've accomplished so far in this session in 2-3 sentences.
+Include: key files changed, decisions made, and current status.
+Reply ONLY with the summary, nothing else.
+```
+
+### Completion Notification with Summary Button
+
+When a session ends, the existing notification is enhanced:
+
+```
+📋 Notifications topic
+┌──────────────────────────────────────┐
+│ ✅ Fix login bug — completed         │
+│ ⏱ 12 min · 💬 5 prompts             │
+│                                      │
+│ [📋 Summary]                         │
+└──────────────────────────────────────┘
+```
+
+Tapping `[📋 Summary]` button:
+- **If session still alive** (agent not yet disconnected): prompt agent, display in session topic
+- **If session already disconnected**: display "Session has ended, summary not available"
+
+Callback prefix: `sm:` (e.g., `sm:summary:<sessionId>`)
+
+### Session.generateSummary()
+
+Follows the `autoName()` pattern but is called on-demand, not automatically:
 
 ```typescript
-// On Session class
-async generateDigest(): Promise<string> {
-  // Similar to autoName() — pause, prompt, capture, resume
+async generateSummary(timeoutMs = 15000): Promise<string> {
+  // 1. Pause session emitter
+  // 2. Inject summary prompt into agent
+  // 3. Capture text response (max 500 chars)
+  // 4. Resume normal delivery
+  // 5. Timeout → return empty string
 }
 ```
 
-### DigestStore
+Key differences from autoName():
+- Longer timeout (15s vs ~5s) since summaries are longer
+- Called explicitly by user, not automatically
+- Result is displayed to user, not used internally
 
-Simple JSON file persistence, similar to UsageStore/SessionStore patterns:
+### CLI Support
+
+```bash
+openacp session summary          # summary for most recent active session
+openacp session summary <id>     # summary for specific session
+```
+
+Calls the API: `POST /api/sessions/:id/summary`
+Response: `{ ok: true, summary: string }` or `{ ok: false, error: string }`
+
+### Prompt Count Tracking
+
+Add `promptCount` to Session for the notification stats:
 
 ```typescript
-interface DigestRecord {
-  id: string;
-  sessionId: string;
-  sessionName: string;
-  agentName: string;
-  workingDir: string;
-  summary: string;
-  startedAt: string;
-  completedAt: string;
-  // Quick stats from the session
-  promptCount: number;
-  durationMinutes: number;
-}
-
-interface DigestStoreFile {
-  version: 1;
-  digests: DigestRecord[];
-}
-```
-
-- File: `~/.openacp/digests.json`
-- Retention: configurable (default 90 days), cleanup on startup + daily interval
-- Debounced writes (2s), flush on shutdown
-
-### Rich Notifications
-
-Current notification on session_end:
-```
-✅ Session "Fix login bug" completed
-```
-
-With digest:
-```
-✅ Fix login bug — completed
-
-Fixed the authentication bypass in auth.ts by adding proper token
-validation. Updated 3 test cases. Login flow now correctly rejects
-expired tokens.
-
-⏱ 12 min · 🔤 45k tokens · 📁 ~/myproject
-```
-
-### Telegram `/digest` Command
-
-```
-/digest         → show last 5 digests
-/digest 10      → show last 10
-/digest claude  → filter by agent name
-```
-
-Output:
-```
-📋 Recent Session Digests
-
-── Fix login bug (claude) · 12 min ago ──
-Fixed auth bypass in auth.ts, added token validation, updated 3 tests.
-
-── Add dark mode (claude) · 2h ago ──
-Implemented dark mode toggle in settings, added CSS variables for
-theming, updated 8 components.
-
-── Refactor API (codex) · yesterday ──
-Extracted route handlers into separate files, added input validation
-middleware.
-```
-
-### API Endpoint
-
-```
-GET /api/digests
-  ?limit=10         (default 20)
-  ?agent=claude     (filter by agent)
-  ?since=2026-03-20 (filter by date)
-
-Response: { ok: true, digests: DigestRecord[] }
-```
-
-### Config
-
-```typescript
-// In ConfigSchema, after usage:
-const DigestSchema = z.object({
-  enabled: z.boolean().default(true),
-  retentionDays: z.number().default(90),
-}).default({});
+// In Session class
+promptCount: number = 0;
+// Incremented in enqueuePrompt()
 ```
 
 ### Error Handling
 
 | Scenario | Behavior |
 |----------|----------|
-| Agent fails to summarize | Fall back to generic "Session completed" — log warning |
-| Agent times out (>10s) | Abort prompt, use generic summary |
-| Session ended by error/cancel | Skip digest (only for `finished` status) |
-| DigestStore write fails | Log error, continue — don't block session cleanup |
-| Corrupt digests.json | Backup to `.bak`, start fresh (same as UsageStore) |
+| Agent fails to summarize | Reply "Could not generate summary" in topic |
+| Agent times out (>15s) | Reply "Summary timed out" in topic |
+| Session not active | Reply "Session has ended, summary not available" |
+| /summary in non-session topic | Reply with guidance |
+| Agent crashed mid-summary | Catch error, reply with failure message |
 
 ### Affected Components
 
-**Core layer** (new):
-- `src/core/digest-store.ts` — `DigestStore` class (append, query, cleanup)
-- `src/core/session.ts` — add `generateDigest()` method (like autoName)
-
 **Core layer** (modify):
-- `src/core/session-bridge.ts` — call `generateDigest()` before disconnect on session_end
-- `src/core/core.ts` — create DigestStore in constructor, destroy in stop(), expose property
-- `src/core/config.ts` — add `DigestSchema` to ConfigSchema
-- `src/core/types.ts` — add `DigestRecord` interface
-- `src/core/index.ts` — export DigestStore
-- `src/core/api/routes/sessions.ts` — add `GET /api/digests` endpoint
+- `src/core/session.ts` — add `generateSummary()` method + `promptCount` property
+- `src/core/core.ts` — add `summarizeSession(sessionId)` method
+- `src/core/api/routes/sessions.ts` — add `POST /sessions/:id/summary` endpoint
 
 **Adapter layer** (modify):
-- `src/adapters/telegram/commands/session.ts` — add `handleDigest()` command
-- `src/adapters/telegram/commands/index.ts` — register `/digest` command + STATIC_COMMANDS
-- `src/adapters/telegram/formatting.ts` — add `formatDigestList()` and `formatDigestNotification()`
+- `src/adapters/telegram/commands/session.ts` — add `handleSummary()` + `handleSummaryCallback()`
+- `src/adapters/telegram/commands/index.ts` — register `/summary` command, `sm:` callbacks, STATIC_COMMANDS
+- `src/adapters/telegram/formatting.ts` — add `formatSummary()` helper
 
-**No changes needed**:
-- `notification.ts` — existing NotificationMessage.summary field is sufficient for rich content
-- `session-store.ts` — digests are separate from session records
+**Adapter layer** (modify — notification enhancement):
+- `src/core/session-bridge.ts` — include `[📋 Summary]` button in session_end notification (pass metadata with sessionId for callback)
+
+**No new files needed**:
+- No DigestStore
+- No digest-store.ts
+- No config changes (no DigestSchema)
+- No persistent storage
