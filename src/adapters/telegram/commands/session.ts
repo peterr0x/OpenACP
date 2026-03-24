@@ -400,12 +400,7 @@ export async function handleArchive(
     return;
   }
 
-  if (session.status === "initializing") {
-    await ctx.reply("⏳ Please wait for session to be ready.", { parse_mode: "HTML" });
-    return;
-  }
-
-  if (session.status !== "active") {
+  if (session.status === "finished" || session.status === "cancelled" || session.status === "error") {
     await ctx.reply(`⚠️ Cannot archive — session is ${session.status}.`, { parse_mode: "HTML" });
     return;
   }

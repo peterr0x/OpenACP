@@ -211,9 +211,7 @@ export class OpenACPCore {
   ): Promise<{ ok: true; newThreadId: string } | { ok: false; error: string }> {
     const session = this.sessionManager.getSession(sessionId);
     if (!session) return { ok: false, error: "Session not found" };
-    if (session.status === "initializing")
-      return { ok: false, error: "Session is still initializing" };
-    if (session.status !== "active")
+    if (session.status === "finished" || session.status === "cancelled" || session.status === "error")
       return { ok: false, error: `Session is ${session.status}` };
 
     const adapter = this.adapters.get(session.channelId);

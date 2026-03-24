@@ -927,6 +927,10 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
 
     const chatId = this.telegramConfig.chatId;
     const oldTopicId = Number(session.threadId);
+    if (!oldTopicId || isNaN(oldTopicId)) {
+      log.warn({ sessionId, threadId: session.threadId }, "Cannot archive: invalid topicId");
+      return null;
+    }
     // Strip existing 🔄 prefix to avoid stacking on repeated archives
     const rawName = (session.name || `Session ${session.id.slice(0, 6)}`).replace(/^🔄\s*/, "");
 
@@ -947,7 +951,13 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
     }
 
     // 4. Delete old topic
-    await deleteSessionTopic(this.bot, chatId, oldTopicId);
+    try {
+      await deleteSessionTopic(this.bot, chatId, oldTopicId);
+    } catch (deleteErr) {
+      session.archiving = false;
+      log.error({ err: deleteErr, sessionId, topicId: oldTopicId }, "Failed to delete topic");
+      throw new Error(`Failed to delete topic: ${(deleteErr as Error).message}. Bot may need admin rights with "Manage Topics" permission.`);
+    }
 
     // 5. Create new topic — wrapped in try/catch for orphan recovery
     let newTopicId: number;
