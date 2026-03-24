@@ -34,11 +34,15 @@ function generateInjectScript(_agentKey: string, spec: AgentIntegrationSpec): st
   const sidVar = spec.sessionIdVar ?? "SESSION_ID";
   const cwdVar = spec.workingDirVar ?? "WORKING_DIR";
 
+  // Resolve jq: check ~/.openacp/bin first, then PATH
+  const jqResolver = `JQ=$(command -v jq 2>/dev/null || echo "$HOME/.openacp/bin/jq")`;
+
   if (spec.outputFormat === "plaintext") {
     return `#!/bin/bash
+${jqResolver}
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '${spec.sessionIdField}')
-CWD=$(echo "$INPUT" | jq -r '.cwd')
+SESSION_ID=$(echo "$INPUT" | "$JQ" -r '${spec.sessionIdField}')
+CWD=$(echo "$INPUT" | "$JQ" -r '.cwd')
 
 echo "${sidVar}: $SESSION_ID"
 echo "${cwdVar}: $CWD"
@@ -49,11 +53,12 @@ exit 0
 
   // JSON output (Gemini, Cline, Cursor)
   return `#!/bin/bash
+${jqResolver}
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '${spec.sessionIdField}')
-CWD=$(echo "$INPUT" | jq -r '.cwd')
+SESSION_ID=$(echo "$INPUT" | "$JQ" -r '${spec.sessionIdField}')
+CWD=$(echo "$INPUT" | "$JQ" -r '.cwd')
 
-jq -n --arg sid "$SESSION_ID" --arg cwd "$CWD" \\
+"$JQ" -n --arg sid "$SESSION_ID" --arg cwd "$CWD" \\
   '{"additionalContext":"${sidVar}: \\($sid)\\n${cwdVar}: \\($cwd)"}'
 
 exit 0

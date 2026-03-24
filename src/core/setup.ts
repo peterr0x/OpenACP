@@ -633,16 +633,46 @@ export async function setupRunMode(stepNum = 3, totalSteps = 3): Promise<{ runMo
 
 // --- Orchestrator ---
 
-function printWelcomeBanner(): void {
-  console.log(`
-${c.cyan}${c.bold}  ╔══════════════════════════════╗
-  ║        Welcome to OpenACP    ║
-  ╚══════════════════════════════╝${c.reset}
-`);
+function applyGradient(text: string): string {
+  // Purple → indigo → blue → cyan gradient using ANSI 256 colors
+  const colors = [135, 99, 63, 33, 39, 44, 44];
+  const lines = text.split("\n");
+  return lines
+    .map((line, i) => {
+      const colorIdx = Math.min(i, colors.length - 1);
+      return `\x1b[38;5;${colors[colorIdx]}m${line}\x1b[0m`;
+    })
+    .join("\n");
+}
+
+const BANNER = `
+   ██████╗ ██████╗ ███████╗███╗   ██╗ █████╗  ██████╗██████╗
+  ██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔══██╗██╔════╝██╔══██╗
+  ██║   ██║██████╔╝█████╗  ██╔██╗ ██║███████║██║     ██████╔╝
+  ██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║██╔══██║██║     ██╔═══╝
+  ╚██████╔╝██║     ███████╗██║ ╚████║██║  ██║╚██████╗██║
+   ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝╚═╝
+`;
+
+/** Compact banner for normal startup (foreground mode) */
+export async function printStartBanner(): Promise<void> {
+  let version = "0.0.0";
+  try {
+    const { getCurrentVersion } = await import("../cli/version.js");
+    version = getCurrentVersion();
+  } catch {
+    // ignore
+  }
+  console.log(applyGradient(BANNER));
+  console.log(`${c.dim}              AI coding agents, anywhere.  v${version}${c.reset}\n`);
+}
+
+async function printWelcomeBanner(): Promise<void> {
+  await printStartBanner();
 }
 
 export async function runSetup(configManager: ConfigManager): Promise<boolean> {
-  printWelcomeBanner();
+  await printWelcomeBanner();
 
   try {
     const { select: selectChannel } = await import("@inquirer/prompts");
@@ -772,23 +802,7 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
       ok(`Config saved to ${c.bold}${configManager.getConfigPath()}`),
     );
 
-    // Pre-download cloudflared if tunnel enabled
-    if (config.tunnel.enabled && config.tunnel.provider === "cloudflare") {
-      console.log(dim("  Ensuring cloudflared is installed..."));
-      try {
-        const { ensureCloudflared } = await import(
-          "../tunnel/providers/install-cloudflared.js"
-        );
-        const binPath = await ensureCloudflared();
-        console.log(ok(`cloudflared ready at ${dim(binPath)}`));
-      } catch (err) {
-        console.log(
-          warn(
-            `Could not install cloudflared: ${(err as Error).message}. Tunnel may not work.`,
-          ),
-        );
-      }
-    }
+    // Dependencies (cloudflared, etc.) will be installed by post-upgrade check on first start
 
     console.log(ok("Starting OpenACP..."));
     console.log("");

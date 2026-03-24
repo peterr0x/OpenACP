@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
 import { createChildLogger } from '../../core/log.js'
+import { commandExists } from '../../core/agent-dependencies.js'
 import type { TunnelProvider } from '../provider.js'
-import { ensureCloudflared } from './install-cloudflared.js'
 
 const log = createChildLogger({ module: 'cloudflare-tunnel' })
 
@@ -15,28 +18,17 @@ export class CloudflareTunnelProvider implements TunnelProvider {
   }
 
   async start(localPort: number): Promise<string> {
-    const maxRetries = 3
-    let lastError: Error | null = null
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // Find binary — post-upgrade should have installed it, but fallback to ensureCloudflared() as safety net
+    let binaryPath = this.findBinary()
+    if (!binaryPath) {
+      log.warn('cloudflared not found locally, attempting auto-install as fallback...')
       try {
-        const url = await this.tryStart(localPort)
-        return url
+        const { ensureCloudflared } = await import('./install-cloudflared.js')
+        binaryPath = await ensureCloudflared()
       } catch (err) {
-        lastError = err as Error
-        if (attempt < maxRetries) {
-          const delay = attempt * 2000
-          log.warn({ attempt, maxRetries, err: lastError.message }, `Cloudflare tunnel failed, retrying in ${delay / 1000}s...`)
-          await new Promise(r => setTimeout(r, delay))
-        }
+        throw new Error(`cloudflared is not installed and auto-install failed: ${(err as Error).message}`)
       }
     }
-
-    throw lastError!
-  }
-
-  private async tryStart(localPort: number): Promise<string> {
-    const binaryPath = await ensureCloudflared()
 
     const args = ['tunnel', '--url', `http://localhost:${localPort}`]
     if (this.options.domain) {
@@ -98,5 +90,17 @@ export class CloudflareTunnelProvider implements TunnelProvider {
 
   getPublicUrl(): string {
     return this.publicUrl
+  }
+
+  private findBinary(): string | null {
+    // 1. Check PATH first (respects user's system install)
+    if (commandExists('cloudflared')) return 'cloudflared'
+
+    // 2. Check ~/.openacp/bin/ (installed by post-upgrade)
+    const binPath = path.join(os.homedir(), '.openacp', 'bin', 'cloudflared')
+    if (fs.existsSync(binPath)) return binPath
+
+    // 3. Not found
+    return null
   }
 }

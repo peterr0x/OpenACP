@@ -52,6 +52,20 @@ export async function startServer() {
   initLogger(config.logging)
   log.info({ configPath: configManager.getConfigPath() }, 'Config loaded')
 
+  // Show banner in foreground TTY mode (not daemon, not piped)
+  if (process.stdout.isTTY && !process.env.NO_COLOR && config.runMode !== 'daemon') {
+    const { printStartBanner } = await import('./core/setup.js')
+    await printStartBanner()
+  }
+
+  // Post-upgrade dependency check (blocking — must complete before server start)
+  try {
+    const { runPostUpgradeChecks } = await import('./core/post-upgrade.js')
+    await runPostUpgradeChecks(config)
+  } catch (err) {
+    log.warn({ err }, 'Post-upgrade check failed')
+  }
+
   // Async cleanup of old session logs (non-blocking)
   cleanupOldSessionLogs(config.logging.sessionLogRetentionDays).catch(err =>
     log.warn({ err }, 'Session log cleanup failed')
