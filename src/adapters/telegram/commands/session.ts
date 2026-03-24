@@ -2,7 +2,7 @@ import type { Bot, Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import type { OpenACPCore } from "../../../core/index.js";
 import type { Session } from "../../../core/session.js";
-import { escapeHtml, formatUsageReport } from "../formatting.js";
+import { escapeHtml, formatUsageReport, formatSummary } from "../formatting.js";
 import { createChildLogger } from "../../../core/log.js";
 import type { CommandsAssistantContext } from "../types.js";
 const log = createChildLogger({ module: "telegram-cmd-session" });
@@ -463,5 +463,80 @@ export async function handleArchiveConfirm(
         summary: `Failed to recreate topic for session "${sessionId}": ${result.error}`,
       });
     }
+  }
+}
+
+export async function handleSummary(
+  ctx: Context,
+  core: OpenACPCore,
+): Promise<void> {
+  const threadId = ctx.message?.message_thread_id;
+  if (!threadId) return;
+
+  const session = core.sessionManager.getSessionByThread("telegram", String(threadId));
+  if (!session) {
+    await ctx.reply(
+      "ℹ️ <b>/summary</b> works in session topics — it asks the agent to summarize the current session.\n\nGo to an active session topic and type /summary there.",
+      { parse_mode: "HTML" },
+    );
+    return;
+  }
+
+  if (session.status !== "active") {
+    await ctx.reply("⚠️ Session has ended. Summary is only available for active sessions.", { parse_mode: "HTML" });
+    return;
+  }
+
+  await ctx.replyWithChatAction("typing");
+  const result = await core.summarizeSession(session.id);
+
+  if (result.ok) {
+    await ctx.reply(formatSummary(result.summary, session.name), { parse_mode: "HTML" });
+  } else {
+    await ctx.reply(`⚠️ ${escapeHtml(result.error)}`, { parse_mode: "HTML" });
+  }
+}
+
+export async function handleSummaryCallback(
+  ctx: Context,
+  core: OpenACPCore,
+  chatId: number,
+): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  if (!data) return;
+
+  try {
+    await ctx.answerCallbackQuery();
+  } catch { /* expired */ }
+
+  const sessionId = data.replace("sm:summary:", "");
+  const session = core.sessionManager.getSession(sessionId);
+
+  if (!session || session.status !== "active") {
+    try {
+      await ctx.answerCallbackQuery({ text: "Session has ended, summary not available." });
+    } catch { /* already answered */ }
+    return;
+  }
+
+  const threadId = Number(session.threadId);
+  if (!threadId) return;
+
+  await ctx.api.sendMessage(chatId, "📋 Generating summary...", {
+    message_thread_id: threadId,
+    parse_mode: "HTML",
+  });
+
+  const result = await core.summarizeSession(sessionId);
+  if (result.ok) {
+    await ctx.api.sendMessage(chatId, formatSummary(result.summary, session.name), {
+      message_thread_id: threadId,
+      parse_mode: "HTML",
+    });
+  } else {
+    await ctx.api.sendMessage(chatId, `⚠️ ${escapeHtml(result.error)}`, {
+      message_thread_id: threadId,
+      parse_mode: "HTML",
+    });
   }
 }

@@ -174,6 +174,22 @@ export class OpenACPCore {
     }
   }
 
+  // --- Summary ---
+
+  async summarizeSession(sessionId: string): Promise<{ ok: true; summary: string } | { ok: false; error: string }> {
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) return { ok: false, error: "Session not found" };
+    if (session.status !== "active") return { ok: false, error: `Session is ${session.status}, summary is only available for active sessions` };
+
+    try {
+      const summary = await session.generateSummary();
+      if (!summary) return { ok: false, error: "Agent could not generate summary" };
+      return { ok: true, summary };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
   // --- Archive ---
 
   async archiveSession(
