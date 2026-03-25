@@ -4,7 +4,7 @@
 
 **Goal:** Add on-demand `/summary` command that asks the agent to summarize the current session. User-initiated, displayed in session topic, no persistent storage needed.
 
-**Architecture:** `Session.generateSummary()` follows the `autoName()` pause/capture/resume pattern. `OpenACPCore.summarizeSession()` validates state and calls it. Telegram adapter adds `/summary` command + `[📋 Summary]` button in completion notifications.
+**Architecture:** `Session.generateSummary()` follows the `autoName()` pause/capture/resume pattern. `OpenACPCore.summarizeSession()` handles both active sessions (direct prompt) and ended sessions (respawn agent with conversation history via `resumeAgentSessionId`, prompt, destroy). Telegram adapter adds `/summary` command + `[📋 Summary]` button in completion notifications.
 
 **Tech Stack:** TypeScript, grammY, vitest
 

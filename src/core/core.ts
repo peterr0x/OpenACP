@@ -218,20 +218,20 @@ export class OpenACPCore {
       return { ok: false, error: "Session not found or has no agent history" };
     }
 
-    const caps = (await import("./agent-registry.js")).getAgentCapabilities(record.agentName);
+    const caps = getAgentCapabilities(record.agentName);
     if (!caps.supportsResume) {
       return { ok: false, error: `Agent "${record.agentName}" does not support resume — cannot summarize ended session` };
     }
 
-    let agentInstance: import("./agent-instance.js").AgentInstance | undefined;
+    let tempSession: Session | undefined;
     try {
-      agentInstance = await this.agentManager.resume(
+      const agentInstance = await this.agentManager.resume(
         record.agentName,
         record.workingDir,
         record.agentSessionId,
       );
 
-      const tempSession = new Session({
+      tempSession = new Session({
         id: `summary-${sessionId}`,
         channelId: record.channelId,
         agentName: record.agentName,
@@ -246,8 +246,8 @@ export class OpenACPCore {
     } catch (err) {
       return { ok: false, error: (err as Error).message };
     } finally {
-      if (agentInstance) {
-        try { await agentInstance.destroy(); } catch { /* best effort */ }
+      if (tempSession) {
+        try { await tempSession.destroy(); } catch { /* best effort */ }
       }
     }
   }

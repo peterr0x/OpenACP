@@ -525,8 +525,7 @@ export async function handleSummaryCallback(
   // Find thread ID from active session or stored record
   const session = core.sessionManager.getSession(sessionId);
   const record = !session ? core.sessionManager.getSessionRecord(sessionId) : undefined;
-  const platform = record?.platform as { topicId?: number } | undefined;
-  const threadId = session ? Number(session.threadId) : (platform?.topicId ?? 0);
+  const threadId = session ? Number(session.threadId) : ((record?.platform as any)?.topicId ?? 0);
   if (!threadId) return;
 
   await ctx.api.sendMessage(chatId, "📋 Generating summary...", {
