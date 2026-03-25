@@ -23,6 +23,7 @@ import {
   cmdDoctor,
   cmdAgents,
   cmdTunnel,
+  cmdOnboard,
 } from './cli/commands.js'
 
 const args = process.argv.slice(2);
@@ -49,6 +50,7 @@ const commands: Record<string, () => Promise<void>> = {
   'doctor': () => cmdDoctor(args),
   'agents': () => cmdAgents(args),
   'tunnel': () => cmdTunnel(args),
+  'onboard': () => cmdOnboard(),
   '--daemon-child': async () => {
     const { startServer } = await import('./main.js')
     await startServer()

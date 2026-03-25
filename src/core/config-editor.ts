@@ -1,5 +1,31 @@
-import { select, input } from '@inquirer/prompts'
+import * as clack from '@clack/prompts'
 import type { Config, ConfigManager } from './config.js'
+
+// Compatibility wrappers — convert @inquirer/prompts API to @clack/prompts
+async function select<T extends string>(opts: { message: string; choices: Array<{ name: string; value: T; description?: string }>; default?: T }): Promise<T> {
+  const result = await clack.select({
+    message: opts.message,
+    options: opts.choices.map(ch => ({ label: ch.name, value: ch.value, hint: ch.description })) as any,
+    initialValue: opts.default,
+  })
+  if (clack.isCancel(result)) { clack.cancel('Cancelled.'); process.exit(0) }
+  return result as T
+}
+
+async function input(opts: { message: string; default?: string; validate?: (val: string) => string | boolean }): Promise<string> {
+  const result = await clack.text({
+    message: opts.message,
+    initialValue: opts.default,
+    validate: opts.validate ? (val) => {
+      const r = opts.validate!((val ?? "") as string)
+      if (r === true || r === undefined) return undefined
+      if (typeof r === 'string') return r
+      return undefined
+    } : undefined,
+  })
+  if (clack.isCancel(result)) { clack.cancel('Cancelled.'); process.exit(0) }
+  return result as string
+}
 import { validateBotToken, validateChatId, validateDiscordToken } from './setup.js'
 import { installAutoStart, uninstallAutoStart, isAutoStartInstalled, isAutoStartSupported } from './autostart.js'
 import { expandHome } from './config.js'

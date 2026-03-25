@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock @inquirer/prompts
-vi.mock('@inquirer/prompts', () => ({
+// Mock @clack/prompts
+vi.mock('@clack/prompts', () => ({
   select: vi.fn(),
-  input: vi.fn(),
+  text: vi.fn(),
+  confirm: vi.fn(),
+  isCancel: vi.fn(() => false),
+  cancel: vi.fn(),
 }))
 
 // Mock autostart
@@ -31,10 +34,10 @@ describe('config-editor', () => {
   })
 
   it('exits without saving when no changes are made', async () => {
-    const { select } = await import('@inquirer/prompts')
+    const clack = await import('@clack/prompts')
     const { runConfigEditor } = await import('../core/config-editor.js')
 
-    vi.mocked(select).mockResolvedValueOnce('exit')
+    vi.mocked(clack.select).mockResolvedValueOnce('exit')
 
     const mockConfigManager = {
       load: vi.fn(),
@@ -57,14 +60,14 @@ describe('config-editor', () => {
   })
 
   it('saves changes when user edits workspace and exits', async () => {
-    const { select, input } = await import('@inquirer/prompts')
+    const clack = await import('@clack/prompts')
     const { runConfigEditor } = await import('../core/config-editor.js')
 
-    vi.mocked(select)
+    vi.mocked(clack.select)
       .mockResolvedValueOnce('workspace')
       .mockResolvedValueOnce('exit')
 
-    vi.mocked(input).mockResolvedValueOnce('~/new-workspace')
+    vi.mocked(clack.text).mockResolvedValueOnce('~/new-workspace')
 
     const mockConfigManager = {
       load: vi.fn(),
@@ -88,13 +91,16 @@ describe('config-editor', () => {
     )
   })
 
-  it('discards changes on Ctrl+C (ExitPromptError)', async () => {
-    const { select } = await import('@inquirer/prompts')
+  it('discards changes on Ctrl+C (cancel)', async () => {
+    const clack = await import('@clack/prompts')
     const { runConfigEditor } = await import('../core/config-editor.js')
 
-    const exitError = new Error('User cancelled')
-    exitError.name = 'ExitPromptError'
-    vi.mocked(select).mockRejectedValueOnce(exitError)
+    vi.mocked(clack.isCancel).mockReturnValueOnce(true)
+    vi.mocked(clack.select).mockResolvedValueOnce(Symbol('cancel'))
+
+    // Mock process.exit to throw so execution stops (like real exit would)
+    const exitError = new Error('process.exit')
+    const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => { throw exitError })
 
     const mockConfigManager = {
       load: vi.fn(),
@@ -109,7 +115,9 @@ describe('config-editor', () => {
       getConfigPath: vi.fn(() => '/tmp/config.json'),
     }
 
-    await runConfigEditor(mockConfigManager as any)
+    await expect(runConfigEditor(mockConfigManager as any)).rejects.toThrow('process.exit')
     expect(mockConfigManager.save).not.toHaveBeenCalled()
+    expect(mockExit).toHaveBeenCalledWith(0)
+    mockExit.mockRestore()
   })
 })

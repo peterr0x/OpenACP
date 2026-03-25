@@ -4,7 +4,7 @@ import type { DiscordAdapter } from '../adapter.js'
 
 import { handleNew, handleNewChat, handleNewSessionButton } from './new-session.js'
 import { handleCancel, handleStatus, handleSessions, handleHandoff, handleCleanupButton } from './session.js'
-import { handleDangerous, handleDangerousButton, handleRestart, handleUpdate } from './admin.js'
+import { handleDangerous, handleDangerousButton, handleTTS, handleTTSButton, handleRestart, handleUpdate } from './admin.js'
 import { handleMenu, handleHelp, handleClear, handleMenuButton } from './menu.js'
 import { handleAgents, handleInstall, handleAgentButton } from './agents.js'
 import { handleDoctor, handleDoctorButton } from './doctor.js'
@@ -70,6 +70,9 @@ export async function handleSlashCommand(
       case 'clear':
         await handleClear(interaction, adapter)
         break
+      case 'tts':
+        await handleTTS(interaction, adapter)
+        break
       default:
         log.warn({ commandName }, '[discord-router] Unknown slash command')
         if (!interaction.replied && !interaction.deferred) {
@@ -123,6 +126,11 @@ export async function setupButtonCallbacks(
 
     if (customId.startsWith('d:')) {
       await handleDangerousButton(interaction, adapter)
+      return
+    }
+
+    if (customId.startsWith('v:')) {
+      await handleTTSButton(interaction, adapter)
       return
     }
 

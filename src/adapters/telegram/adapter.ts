@@ -27,6 +27,7 @@ import {
   setupIntegrateCallbacks,
   buildMenuKeyboard,
   handlePendingWorkspaceInput,
+  handlePendingResumeInput,
   STATIC_COMMANDS,
 } from "./commands/index.js";
 import { PermissionHandler } from "./permissions.js";
@@ -411,6 +412,11 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
         return;
       }
 
+      // Check for pending workspace input from interactive /resume flow
+      if (await handlePendingResumeInput(ctx, this.core, this.telegramConfig.chatId, this.assistantTopicId)) {
+        return;
+      }
+
       // General topic or no thread → redirect to assistant
       if (!threadId) {
         const html = redirectToAssistant(
@@ -588,7 +594,9 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
         const chatIdStr = String(this.telegramConfig.chatId);
         const numericId = chatIdStr.startsWith('-100') ? chatIdStr.slice(4) : chatIdStr.replace('-', '');
         const usageMsgId = tracker.getUsageMsgId();
-        const deepLink = `https://t.me/c/${numericId}/${usageMsgId ?? ctx.threadId}`;
+        const deepLink = usageMsgId
+          ? `https://t.me/c/${numericId}/${ctx.threadId}/${usageMsgId}`
+          : `https://t.me/c/${numericId}/${ctx.threadId}`;
         const text = `✅ <b>${escapeHtml(sessionName)}</b>\nTask completed.\n\n<a href="${deepLink}">→ Go to topic</a>`;
         this.sendQueue.enqueue(() =>
           this.bot.api.sendMessage(this.telegramConfig.chatId, text, {
@@ -920,27 +928,22 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
     await this.skillManager.cleanup(sessionId);
   }
 
-  async archiveSessionTopic(sessionId: string): Promise<{ newThreadId: string } | null> {
+  async archiveSessionTopic(sessionId: string): Promise<void> {
     const core = this.core as OpenACPCore;
     const session = core.sessionManager.getSession(sessionId);
-    if (!session) return null;
+    if (!session) return;
 
     const chatId = this.telegramConfig.chatId;
     const oldTopicId = Number(session.threadId);
-    if (!oldTopicId || isNaN(oldTopicId)) {
-      log.warn({ sessionId, threadId: session.threadId }, "Cannot archive: invalid topicId");
-      return null;
-    }
-    // Strip existing 🔄 prefix to avoid stacking on repeated archives
-    const rawName = (session.name || `Session ${session.id.slice(0, 6)}`).replace(/^🔄\s*/, "");
 
-    // 1. Set archiving flag — sendMessage will skip while this is true
+    // Set archiving flag — sendMessage will skip while this is true.
+    // Flag stays true until core finishes cancelSession (prevents race window).
     session.archiving = true;
 
-    // 2. Finalize any pending draft
+    // Finalize any pending draft
     await this.draftManager.finalize(session.id, this.assistantSession?.id);
 
-    // 3. Cleanup all trackers for old topic
+    // Cleanup all trackers
     this.draftManager.cleanup(session.id);
     this.toolTracker.cleanup(session.id);
     await this.skillManager.cleanup(session.id);
@@ -950,45 +953,7 @@ export class TelegramAdapter extends ChannelAdapter<OpenACPCore> {
       this.sessionTrackers.delete(session.id);
     }
 
-    // 4. Delete old topic
-    try {
-      await deleteSessionTopic(this.bot, chatId, oldTopicId);
-    } catch (deleteErr) {
-      session.archiving = false;
-      log.error({ err: deleteErr, sessionId, topicId: oldTopicId }, "Failed to delete topic");
-      throw new Error(`Failed to delete topic: ${(deleteErr as Error).message}. Bot may need admin rights with "Manage Topics" permission.`);
-    }
-
-    // 5. Create new topic — wrapped in try/catch for orphan recovery
-    let newTopicId: number;
-    try {
-      newTopicId = await createSessionTopic(this.bot, chatId, `🔄 ${rawName}`);
-    } catch (createErr) {
-      // Critical: old topic deleted but new one failed — session is orphaned
-      session.archiving = false;
-      core.notificationManager.notifyAll({
-        sessionId: session.id,
-        sessionName: session.name,
-        type: "error",
-        summary: `Topic recreation failed for session "${rawName}". Session is orphaned. Error: ${(createErr as Error).message}`,
-      });
-      throw createErr;
-    }
-
-    // 6. Rewire session to new topic
-    session.threadId = String(newTopicId);
-
-    // 7. Persist via patchRecord — spread existing platform data, explicitly delete old skillMsgId
-    const existingRecord = core.sessionManager.getSessionRecord(session.id);
-    const existingPlatform = { ...(existingRecord?.platform ?? {}) };
-    delete (existingPlatform as Record<string, unknown>).skillMsgId;
-    await core.sessionManager.patchRecord(session.id, {
-      platform: { ...existingPlatform, topicId: newTopicId },
-    });
-
-    // 8. Clear archiving flag
-    session.archiving = false;
-
-    return { newThreadId: String(newTopicId) };
+    // Delete topic (removes all messages)
+    await deleteSessionTopic(this.bot, chatId, oldTopicId);
   }
 }

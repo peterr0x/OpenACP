@@ -59,9 +59,14 @@ export async function deleteSessionTopic(
   await bot.api.deleteForumTopic(chatId, threadId);
 }
 
-// Build a Telegram deep link to a specific message
-export function buildDeepLink(chatId: number, messageId: number): string {
+// Build a Telegram deep link to a specific message in a forum topic
+export function buildDeepLink(chatId: number, threadId: number, messageId?: number): string {
   // chatId for supergroups starts with -100, need to strip it for the link
   const cleanId = String(chatId).replace('-100', '')
-  return `https://t.me/c/${cleanId}/${messageId}`
+  // For forum groups: c/{chatId}/{threadId}/{messageId} links to a specific message
+  // Without messageId: c/{chatId}/{threadId} links to the topic itself
+  if (messageId && messageId !== threadId) {
+    return `https://t.me/c/${cleanId}/${threadId}/${messageId}`
+  }
+  return `https://t.me/c/${cleanId}/${threadId}`
 }

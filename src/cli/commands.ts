@@ -39,6 +39,7 @@ Connect messaging platforms (Telegram, Discord) to 28+ AI coding agents via ACP 
 \x1b[1mConfiguration:\x1b[0m
   openacp config                       Interactive config editor
   openacp config set <key> <value>     Set a config value
+  openacp onboard                      Re-run onboarding setup wizard
   openacp reset                        Re-run setup wizard
   openacp update                       Update to latest version
   openacp doctor                       Run system diagnostics
@@ -1018,12 +1019,12 @@ start fresh with the setup wizard. The daemon must be stopped first.
     process.exit(1)
   }
 
-  const { confirm } = await import('@inquirer/prompts')
-  const yes = await confirm({
+  const clack = await import('@clack/prompts')
+  const yes = await clack.confirm({
     message: 'This will delete all OpenACP data (~/.openacp). You will need to set up again. Continue?',
-    default: false,
+    initialValue: false,
   })
-  if (!yes) {
+  if (clack.isCancel(yes) || !yes) {
     console.log('Aborted.')
     return
   }
@@ -1281,18 +1282,19 @@ Fixable issues can be auto-repaired when not using --dry-run.
       if (dryRun) {
         console.log(`  🔧 ${pending.message} (use without --dry-run to fix)`);
       } else {
-        const { confirm } = await import("@inquirer/prompts");
-        const shouldFix = await confirm({
+        const clack = await import("@clack/prompts");
+        const shouldFix = await clack.confirm({
           message: `Fix: ${pending.message}?`,
-          default: false,
+          initialValue: false,
         });
-        if (shouldFix) {
-          const fixResult = await pending.fix();
-          if (fixResult.success) {
-            console.log(`  \x1b[32m✓ ${fixResult.message}\x1b[0m`);
-          } else {
-            console.log(`  \x1b[31m✗ Fix failed: ${fixResult.message}\x1b[0m`);
-          }
+        if (clack.isCancel(shouldFix) || !shouldFix) {
+          continue;
+        }
+        const fixResult = await pending.fix();
+        if (fixResult.success) {
+          console.log(`  \x1b[32m✓ ${fixResult.message}\x1b[0m`);
+        } else {
+          console.log(`  \x1b[31m✗ Fix failed: ${fixResult.message}\x1b[0m`);
         }
       }
     }
@@ -1808,6 +1810,13 @@ ACP-specific flags are automatically stripped.
   }
 }
 
+export async function cmdOnboard(): Promise<void> {
+  const { ConfigManager } = await import('../core/config.js')
+  const cm = new ConfigManager()
+  const { runSetup } = await import('../core/setup.js')
+  await runSetup(cm, { skipRunMode: true })
+}
+
 export async function cmdDefault(command: string | undefined): Promise<void> {
   const forceForeground = command === '--foreground'
 
@@ -1816,7 +1825,7 @@ export async function cmdDefault(command: string | undefined): Promise<void> {
     const { suggestMatch } = await import('./suggest.js')
     const topLevelCommands = [
       'start', 'stop', 'status', 'logs', 'config', 'reset', 'update',
-      'install', 'uninstall', 'plugins', 'api', 'adopt', 'integrate', 'doctor', 'agents',
+      'install', 'uninstall', 'plugins', 'api', 'adopt', 'integrate', 'doctor', 'agents', 'onboard',
     ]
     const suggestion = suggestMatch(command, topLevelCommands)
     console.error(`Unknown command: ${command}`)

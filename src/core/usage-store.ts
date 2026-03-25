@@ -140,7 +140,7 @@ export class UsageStore {
         return;
       }
       this.records = raw.records || [];
-      log.info({ count: this.records.length }, "Loaded usage records");
+      log.debug({ count: this.records.length }, "Loaded usage records");
     } catch (err) {
       log.error({ err }, "Failed to load usage store, backing up corrupt file");
       try {

@@ -72,6 +72,19 @@ export const SLASH_COMMANDS = [
   new SlashCommandBuilder()
     .setName('clear')
     .setDescription('Reset the assistant session'),
+
+  new SlashCommandBuilder()
+    .setName('tts')
+    .setDescription('Toggle Text to Speech for the current session')
+    .addStringOption((o) =>
+      o.setName('mode')
+        .setDescription('on = persistent, off = disable, empty = next message only')
+        .setRequired(false)
+        .addChoices(
+          { name: 'on', value: 'on' },
+          { name: 'off', value: 'off' },
+        ),
+    ),
 ]
 
 export async function registerSlashCommands(guild: Guild): Promise<void> {

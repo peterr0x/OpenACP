@@ -101,6 +101,27 @@ export class MessageDraft {
     }
   }
 
+  async stripPattern(pattern: RegExp): Promise<void> {
+    if (!this.message || !this.buffer) return
+
+    const stripped = this.buffer.replace(pattern, '').trim()
+    if (stripped === this.buffer.trim()) return
+
+    this.buffer = stripped
+    this.lastSentBuffer = stripped
+
+    if (!stripped) return
+
+    try {
+      await this.sendQueue.enqueue(
+        () => this.message!.edit({ content: stripped }),
+        { type: 'other' },
+      )
+    } catch {
+      // Best effort — non-critical edit
+    }
+  }
+
   async finalize(): Promise<void> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer)

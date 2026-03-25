@@ -4,12 +4,18 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { ConfigManager } from '../core/config.js'
 
-// Mock @inquirer/prompts before importing setup
-vi.mock('@inquirer/prompts', () => ({
-  input: vi.fn(),
+// Mock @clack/prompts before importing setup
+vi.mock('@clack/prompts', () => ({
+  text: vi.fn(),
   select: vi.fn(),
   confirm: vi.fn(),
-  checkbox: vi.fn(),
+  multiselect: vi.fn(),
+  autocompleteMultiselect: vi.fn(),
+  spinner: vi.fn(() => ({ start: vi.fn(), stop: vi.fn() })),
+  intro: vi.fn(),
+  outro: vi.fn(),
+  cancel: vi.fn(),
+  isCancel: vi.fn(() => false),
 }))
 
 // Mock child_process for agent detection
@@ -62,12 +68,12 @@ vi.mock('../tunnel/providers/install-cloudflared.js', () => ({
   ensureCloudflared: vi.fn(() => Promise.resolve('/usr/local/bin/cloudflared')),
 }))
 
-import { input, select, confirm } from '@inquirer/prompts'
+import * as clack from '@clack/prompts'
 import { runSetup } from '../core/setup.js'
 
-const mockedInput = vi.mocked(input)
-const mockedSelect = vi.mocked(select)
-const mockedConfirm = vi.mocked(confirm)
+const mockedText = vi.mocked(clack.text)
+const mockedSelect = vi.mocked(clack.select)
+const mockedConfirm = vi.mocked(clack.confirm)
 
 describe('runSetup integration', () => {
   let tmpDir: string
@@ -139,16 +145,16 @@ describe('runSetup integration', () => {
   })
 
   it('creates valid config file and auto-starts', { timeout: 15000 }, async () => {
-    // Input call order:
+    // text() call order:
     // 1. setupTelegram: bot token
     // 2. setupWorkspace: workspace base dir
-    let inputCallIndex = 0
-    mockedInput.mockImplementation((() => {
+    let textCallIndex = 0
+    mockedText.mockImplementation((() => {
       const responses = [
         '123:FAKE_TOKEN',    // bot token
         '~/my-workspace',   // workspace dir
       ]
-      return Promise.resolve(responses[inputCallIndex++])
+      return Promise.resolve(responses[textCallIndex++])
     }) as any)
 
     // Confirm call order:

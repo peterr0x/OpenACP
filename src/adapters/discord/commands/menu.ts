@@ -19,6 +19,7 @@ export function buildMenuKeyboard(): ActionRowBuilder<ButtonBuilder>[] {
     new ButtonBuilder().setCustomId('m:integrate').setLabel('🔗 Integrate').setStyle(ButtonStyle.Secondary),
   )
   const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('m:tts').setLabel('🔊 TTS').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('m:restart').setLabel('🔄 Restart').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('m:update').setLabel('⬆️ Update').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('m:help').setLabel('❓ Help').setStyle(ButtonStyle.Secondary),
@@ -64,6 +65,7 @@ export async function handleHelp(
       `\`/menu\` — Show action menu\n\n` +
       `🔒 **Session Options**\n` +
       `\`/dangerous\` — Toggle dangerous mode (auto-approve permissions)\n` +
+      `\`/tts\` — Toggle Text to Speech (on/off/next message)\n` +
       `\`/handoff\` — Continue session in your terminal\n` +
       `\`/clear\` — Clear assistant session history\n\n` +
       `🩺 **Diagnostics**\n` +
@@ -158,6 +160,21 @@ export async function handleMenuButton(
       case 'm:doctor': {
         const { runDoctorInline } = await import('./doctor.js')
         await runDoctorInline(interaction, adapter)
+        break
+      }
+      case 'm:tts': {
+        const channelId = interaction.channelId
+        const session = adapter.core.sessionManager.getSessionByThread('discord', channelId)
+        if (!session) {
+          await interaction.followUp({ content: '⚠️ No active session in this channel. Use `/tts` inside a session thread.', ephemeral: true })
+        } else {
+          const newMode = session.voiceMode === 'on' ? 'off' : 'on'
+          session.setVoiceMode(newMode)
+          const msg = newMode === 'on'
+            ? '🔊 Text to Speech enabled for this session.'
+            : '🔇 Text to Speech disabled.'
+          await interaction.followUp({ content: msg, ephemeral: true })
+        }
         break
       }
       default:

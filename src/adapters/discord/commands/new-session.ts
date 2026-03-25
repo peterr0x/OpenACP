@@ -5,7 +5,7 @@ import {
 } from 'discord.js'
 import type { ChatInputCommandInteraction, ButtonInteraction } from 'discord.js'
 import { log } from '../../../core/log.js'
-import { buildDangerousModeKeyboard } from './admin.js'
+import { buildSessionControlKeyboard } from './admin.js'
 import { createSessionThread, deleteSessionThread } from '../forums.js'
 import type { DiscordAdapter } from '../adapter.js'
 
@@ -124,14 +124,14 @@ export async function executeNewSession(
     })
 
     // Send welcome message in the new thread
-    const dangerousRow = buildDangerousModeKeyboard(session.id, false)
+    const controlRow = buildSessionControlKeyboard(session.id, false, false)
     await thread.send({
       content:
         `✅ **Session started**\n` +
         `**Agent:** ${session.agentName}\n` +
         `**Workspace:** \`${session.workingDirectory}\`\n\n` +
         `This is your coding session — chat here to work with the agent.`,
-      components: [dangerousRow],
+      components: [controlRow],
     })
 
     // Reply to the interaction with a link to the thread

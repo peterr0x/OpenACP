@@ -1,9 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { input, select } from "@inquirer/prompts";
+import * as clack from "@clack/prompts";
 import type { Config, ConfigManager } from "./config.js";
 import { expandHome } from "./config.js";
 import { commandExists } from "./agent-dependencies.js";
 import type { DiscordChannelConfig } from "../adapters/discord/types.js";
+
+function guardCancel<T>(value: T | symbol): T {
+  if (clack.isCancel(value)) {
+    clack.cancel("Setup cancelled.");
+    process.exit(0);
+  }
+  return value as T;
+}
 
 // --- ANSI colors ---
 
@@ -140,15 +148,18 @@ export async function validateBotAdmin(
 
 // --- Chat ID auto-detection ---
 
-function promptManualChatId(): Promise<number> {
-  return input({
-    message: "Supergroup chat ID (e.g. -1001234567890):",
-    validate: (val) => {
-      const n = Number(val.trim());
-      if (isNaN(n) || !Number.isInteger(n)) return "Chat ID must be an integer";
-      return true;
-    },
-  }).then((val) => Number(val.trim()));
+async function promptManualChatId(): Promise<number> {
+  const val = guardCancel(
+    await clack.text({
+      message: "Supergroup chat ID (e.g. -1001234567890):",
+      validate: (val) => {
+        const n = Number((val ?? "").toString().trim());
+        if (isNaN(n) || !Number.isInteger(n)) return "Chat ID must be an integer";
+        return undefined;
+      },
+    }),
+  ) as string;
+  return Number(val.trim());
 }
 
 async function detectChatId(token: string): Promise<number> {
@@ -258,14 +269,16 @@ async function detectChatId(token: string): Promise<number> {
 
         if (groups.size > 1) {
           cleanup();
-          const choices = [...groups.entries()].map(([id, title]) => ({
-            name: `${title} (${id})`,
+          const options = [...groups.entries()].map(([id, title]) => ({
+            label: `${title} (${id})`,
             value: id,
           }));
-          return select({
-            message: "Multiple groups found. Pick one:",
-            choices,
-          });
+          return guardCancel(
+            await clack.select({
+              message: "Multiple groups found. Pick one:",
+              options,
+            }),
+          );
         }
       } catch {
         // Network error, retry
@@ -328,25 +341,33 @@ export async function setupTelegram(stepNum = 1, totalSteps = 3): Promise<Config
   let botToken = "";
 
   while (true) {
-    botToken = await input({
-      message: "Bot token (from @BotFather):",
-      validate: (val) => val.trim().length > 0 || "Token cannot be empty",
-    });
+    botToken = guardCancel(
+      await clack.text({
+        message: "Bot token (from @BotFather):",
+        validate: (val) => (val ?? "").toString().trim().length > 0 ? undefined : "Token cannot be empty",
+      }),
+    ) as string;
     botToken = botToken.trim();
 
+    const s = clack.spinner();
+    s.start("Validating token...");
     const result = await validateBotToken(botToken);
+    s.stop("Token validated");
+
     if (result.ok) {
       console.log(ok(`Connected to @${result.botUsername}`));
       break;
     }
     console.log(fail(result.error));
-    const action = await select({
-      message: "What to do?",
-      choices: [
-        { name: "Re-enter token", value: "retry" },
-        { name: "Use as-is (skip validation)", value: "skip" },
-      ],
-    });
+    const action = guardCancel(
+      await clack.select({
+        message: "What to do?",
+        options: [
+          { label: "Re-enter token", value: "retry" },
+          { label: "Use as-is (skip validation)", value: "skip" },
+        ],
+      }),
+    );
     if (action === "skip") break;
   }
 
@@ -365,7 +386,7 @@ export async function setupTelegram(stepNum = 1, totalSteps = 3): Promise<Config
       console.log(dim("  2. The group must be a Supergroup (Group Settings → convert)"));
       console.log(dim("  3. Send a message in the group after adding the bot"));
       console.log("");
-      await input({ message: "Press Enter to try again..." });
+      guardCancel(await clack.text({ message: "Press Enter to try again..." }));
       continue;
     }
     console.log(
@@ -384,7 +405,7 @@ export async function setupTelegram(stepNum = 1, totalSteps = 3): Promise<Config
       console.log(dim("  2. Go to Group Settings → Administrators"));
       console.log(dim("  3. Add the bot as an administrator"));
       console.log("");
-      await input({ message: "Press Enter to check again..." });
+      guardCancel(await clack.text({ message: "Press Enter to check again..." }));
       continue;
     }
     console.log(ok("Bot has admin privileges"));
@@ -440,37 +461,47 @@ export async function setupDiscord(): Promise<DiscordChannelConfig> {
   let botToken = '';
 
   while (true) {
-    botToken = await input({
-      message: 'Bot token (from Discord Developer Portal):',
-      validate: (val) => val.trim().length > 0 || 'Token cannot be empty',
-    });
+    botToken = guardCancel(
+      await clack.text({
+        message: 'Bot token (from Discord Developer Portal):',
+        validate: (val) => (val ?? "").toString().trim().length > 0 ? undefined : 'Token cannot be empty',
+      }),
+    ) as string;
     botToken = botToken.trim();
 
+    const s = clack.spinner();
+    s.start("Validating token...");
     const result = await validateDiscordToken(botToken);
+    s.stop("Token validated");
+
     if (result.ok) {
       console.log(ok(`Connected as @${result.username} (id: ${result.id})`));
       break;
     }
     console.log(fail(result.error));
-    const action = await select({
-      message: 'What to do?',
-      choices: [
-        { name: 'Re-enter token', value: 'retry' },
-        { name: 'Use as-is (skip validation)', value: 'skip' },
-      ],
-    });
+    const action = guardCancel(
+      await clack.select({
+        message: 'What to do?',
+        options: [
+          { label: 'Re-enter token', value: 'retry' },
+          { label: 'Use as-is (skip validation)', value: 'skip' },
+        ],
+      }),
+    );
     if (action === 'skip') break;
   }
 
-  const guildId = await input({
-    message: 'Guild (server) ID:',
-    validate: (val) => {
-      const trimmed = val.trim();
-      if (!trimmed) return 'Guild ID cannot be empty';
-      if (!/^\d{17,20}$/.test(trimmed)) return 'Guild ID must be a numeric Discord snowflake (17-20 digits)';
-      return true;
-    },
-  });
+  const guildId = guardCancel(
+    await clack.text({
+      message: 'Guild (server) ID:',
+      validate: (val) => {
+        const trimmed = (val ?? "").toString().trim();
+        if (!trimmed) return 'Guild ID cannot be empty';
+        if (!/^\d{17,20}$/.test(trimmed)) return 'Guild ID must be a numeric Discord snowflake (17-20 digits)';
+        return undefined;
+      },
+    }),
+  ) as string;
 
   return {
     enabled: true,
@@ -486,12 +517,14 @@ export async function setupAgents(): Promise<{
   defaultAgent: string;
 }> {
   const { AgentCatalog } = await import("./agent-catalog.js");
-  const { select, checkbox } = await import("@inquirer/prompts");
+  const { muteLogger, unmuteLogger } = await import("./log.js");
 
+  muteLogger();
   const catalog = new AgentCatalog();
   catalog.load();
 
-  console.log(dim("  Checking available agents..."));
+  const s = clack.spinner();
+  s.start("Checking available agents...");
   await catalog.refreshRegistryIfStale();
 
   // Claude is always pre-installed (bundled dependency)
@@ -517,42 +550,60 @@ export async function setupAgents(): Promise<{
       });
     }
   }
-  console.log(ok("Claude Agent ready"));
+  s.stop(ok("Claude Agent ready"));
+  unmuteLogger();
 
   const available = catalog.getAvailable();
   const installed = available.filter((a) => a.installed);
   const installable = available.filter((a) => !a.installed && a.available);
 
-  // Offer agent selection — show installed agents as pre-checked + disabled
+  // Offer agent selection — show installed agents as pre-checked + installable agents
   if (installed.length > 0 || installable.length > 0) {
-    const choices = [
-      ...installed.map((a) => ({
-        name: `${a.name} (installed)`,
-        value: a.key,
-        checked: true,
-        disabled: "(already installed)",
-      })),
-      ...installable.slice(0, 10).map((a) => ({
-        name: `${a.name} (${a.distribution})`,
-        value: a.key,
-        checked: false,
-      })),
-    ];
+    // Deduplicate by key AND name
+    const seen = new Set<string>();
+    const options: Array<{ label: string; value: string }> = [];
 
-    const selected = await checkbox({
-      message: "Install additional agents? (Space to select, Enter to continue)",
-      choices,
-    });
+    for (const a of installed) {
+      const dedupeKey = `${a.key}::${a.name}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      options.push({
+        label: `${a.name} (installed)`,
+        value: a.key,
+      });
+    }
+    for (const a of installable) {
+      const dedupeKey = `${a.key}::${a.name}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      options.push({
+        label: `${a.name} (${a.distribution})`,
+        value: a.key,
+      });
+    }
+
+    const installedKeys = installed.map(a => a.key);
+    const selected = guardCancel(
+      await clack.autocompleteMultiselect({
+        message: "Install additional agents? (type to search, Space to select)",
+        options,
+        initialValues: installedKeys,
+        required: false,
+      }),
+    ) as string[];
 
     for (const key of selected) {
       const regAgent = catalog.findRegistryAgent(key);
       if (regAgent) {
-        process.stdout.write(`  Installing ${regAgent.name}... `);
+        const installSpinner = clack.spinner();
+        installSpinner.start(`Installing ${regAgent.name}...`);
+        muteLogger();
         const result = await catalog.install(key);
+        unmuteLogger();
         if (result.ok) {
-          console.log(ok("done"));
+          installSpinner.stop(ok("done"));
         } else {
-          console.log(warn(`skipped: ${result.error}`));
+          installSpinner.stop(warn(`skipped: ${result.error}`));
         }
       }
     }
@@ -563,14 +614,16 @@ export async function setupAgents(): Promise<{
   let defaultAgent = "claude";
 
   if (installedAgents.length > 1) {
-    defaultAgent = await select({
-      message: "Which agent should be the default?",
-      choices: installedAgents.map((key) => {
-        const agent = catalog.getInstalledAgent(key)!;
-        return { name: `${agent.name} (${key})`, value: key };
+    defaultAgent = guardCancel(
+      await clack.select({
+        message: "Which agent should be the default?",
+        options: installedAgents.map((key) => {
+          const agent = catalog.getInstalledAgent(key)!;
+          return { label: `${agent.name} (${key})`, value: key };
+        }),
+        initialValue: "claude",
       }),
-      default: "claude",
-    });
+    ) as string;
   }
 
   console.log(ok(`Default agent: ${c.bold}${defaultAgent}${c.reset}`));
@@ -580,11 +633,13 @@ export async function setupAgents(): Promise<{
 export async function setupWorkspace(stepNum = 2, totalSteps = 3): Promise<{ baseDir: string }> {
   console.log(step(stepNum, totalSteps, "Workspace"));
 
-  const baseDir = await input({
-    message: "Base directory for workspaces:",
-    default: "~/openacp-workspace",
-    validate: (val) => val.trim().length > 0 || "Path cannot be empty",
-  });
+  const baseDir = guardCancel(
+    await clack.text({
+      message: "Base directory for workspaces:",
+      initialValue: "~/openacp-workspace",
+      validate: (val) => (val ?? "").toString().trim().length > 0 ? undefined : "Path cannot be empty",
+    }),
+  ) as string;
 
   return { baseDir: baseDir.trim().replace(/^['"]|['"]$/g, "") };
 }
@@ -598,21 +653,23 @@ export async function setupRunMode(stepNum = 3, totalSteps = 3): Promise<{ runMo
     return { runMode: 'foreground', autoStart: false }
   }
 
-  const mode = await select({
-    message: 'How would you like to run OpenACP?',
-    choices: [
-      {
-        name: 'Background (daemon)',
-        value: 'daemon' as const,
-        description: 'Runs silently, auto-starts on boot. Manage with: openacp status | stop | logs',
-      },
-      {
-        name: 'Foreground (terminal)',
-        value: 'foreground' as const,
-        description: 'Runs in current terminal session. Start with: openacp',
-      },
-    ],
-  })
+  const mode = guardCancel(
+    await clack.select({
+      message: 'How would you like to run OpenACP?',
+      options: [
+        {
+          label: 'Background (daemon)',
+          value: 'daemon' as const,
+          hint: 'Runs silently, auto-starts on boot. Manage with: openacp status | stop | logs',
+        },
+        {
+          label: 'Foreground (terminal)',
+          value: 'foreground' as const,
+          hint: 'Runs in current terminal session. Start with: openacp',
+        },
+      ],
+    }),
+  );
 
   if (mode === 'daemon') {
     const { installAutoStart, isAutoStartSupported } = await import('./autostart.js')
@@ -634,7 +691,6 @@ export async function setupRunMode(stepNum = 3, totalSteps = 3): Promise<{ runMo
 // --- Orchestrator ---
 
 function applyGradient(text: string): string {
-  // Purple → indigo → blue → cyan gradient using ANSI 256 colors
   const colors = [135, 99, 63, 33, 39, 44, 44];
   const lines = text.split("\n");
   return lines
@@ -671,26 +727,29 @@ async function printWelcomeBanner(): Promise<void> {
   await printStartBanner();
 }
 
-export async function runSetup(configManager: ConfigManager): Promise<boolean> {
+export async function runSetup(configManager: ConfigManager, opts?: { skipRunMode?: boolean }): Promise<boolean> {
   await printWelcomeBanner();
+  clack.intro("Let's set up OpenACP");
 
   try {
-    const { select: selectChannel } = await import("@inquirer/prompts");
-    const channelChoice = await selectChannel({
-      message: 'Which messaging platform do you want to use?',
-      choices: [
-        { name: 'Telegram', value: 'telegram' },
-        { name: 'Discord', value: 'discord' },
-        { name: 'Both', value: 'both' },
-      ],
-    });
+    const channelChoice = guardCancel(
+      await clack.select({
+        message: 'Which messaging platform do you want to use?',
+        options: [
+          { label: 'Telegram', value: 'telegram' },
+          { label: 'Discord', value: 'discord' },
+          { label: 'Both', value: 'both' },
+        ],
+      }),
+    );
 
     let telegram: Config["channels"][string] | undefined;
     let discord: DiscordChannelConfig | undefined;
 
     // Calculate total steps dynamically: channel(s) + workspace + run mode
     const channelSteps = channelChoice === 'both' ? 2 : 1;
-    const totalSteps = channelSteps + 2; // + workspace + run mode
+    const runModeSteps = opts?.skipRunMode ? 0 : 1;
+    const totalSteps = channelSteps + 1 + runModeSteps; // + workspace + optional run mode
 
     let currentStep = 0;
 
@@ -707,11 +766,12 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
 
     // Offer Claude CLI integration
     {
-      const { confirm } = await import("@inquirer/prompts");
-      const installClaude = await confirm({
-        message: "Install session transfer for Claude? (enables /openacp:handoff in your terminal)",
-        default: true,
-      });
+      const installClaude = guardCancel(
+        await clack.confirm({
+          message: "Install session transfer for Claude? (enables /openacp:handoff in your terminal)",
+          initialValue: true,
+        }),
+      );
 
       if (installClaude) {
         try {
@@ -733,8 +793,16 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
 
     currentStep++;
     const workspace = await setupWorkspace(currentStep, totalSteps);
-    currentStep++;
-    const { runMode, autoStart } = await setupRunMode(currentStep, totalSteps);
+
+    let runMode: 'foreground' | 'daemon' = 'foreground';
+    let autoStart = false;
+    if (!opts?.skipRunMode) {
+      currentStep++;
+      const result = await setupRunMode(currentStep, totalSteps);
+      runMode = result.runMode;
+      autoStart = result.autoStart;
+    }
+
     const security = {
       allowedUserIds: [] as string[],
       maxConcurrentSessions: 20,
@@ -797,20 +865,17 @@ export async function runSetup(configManager: ConfigManager): Promise<boolean> {
       return false;
     }
 
-    console.log("");
-    console.log(
-      ok(`Config saved to ${c.bold}${configManager.getConfigPath()}`),
-    );
+    clack.outro(`Config saved to ${configManager.getConfigPath()}`);
 
-    // Dependencies (cloudflared, etc.) will be installed by post-upgrade check on first start
-
-    console.log(ok("Starting OpenACP..."));
-    console.log("");
+    if (!opts?.skipRunMode) {
+      console.log(ok("Starting OpenACP..."));
+      console.log("");
+    }
 
     return true;
   } catch (err) {
     if ((err as Error).name === "ExitPromptError") {
-      console.log(dim("\nSetup cancelled."));
+      clack.cancel("Setup cancelled.");
       return false;
     }
     throw err;

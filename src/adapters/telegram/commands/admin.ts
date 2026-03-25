@@ -30,7 +30,7 @@ export function setupDangerousModeCallbacks(bot: Bot, core: OpenACPCore): void {
 
       try {
         await ctx.editMessageReplyMarkup({
-          reply_markup: buildDangerousModeKeyboard(sessionId, session.dangerousMode),
+          reply_markup: buildSessionControlKeyboard(sessionId, session.dangerousMode, session.voiceMode === "on"),
         });
       } catch { /* ignore */ }
       return;
@@ -54,7 +54,7 @@ export function setupDangerousModeCallbacks(bot: Bot, core: OpenACPCore): void {
 
     try {
       await ctx.editMessageReplyMarkup({
-        reply_markup: buildDangerousModeKeyboard(sessionId, newDangerousMode),
+        reply_markup: buildSessionControlKeyboard(sessionId, newDangerousMode, false),
       });
     } catch { /* ignore */ }
   });
@@ -136,6 +136,7 @@ export function buildSessionControlKeyboard(sessionId: string, dangerousMode: bo
       dangerousMode ? "🔐 Disable Dangerous Mode" : "☠️ Enable Dangerous Mode",
       `d:${sessionId}`,
     )
+    .row()
     .text(
       voiceMode ? "🔊 Text to Speech" : "🔇 Text to Speech",
       `v:${sessionId}`,
