@@ -42,7 +42,7 @@ describe("handleArchive", () => {
     );
   });
 
-  it("allows archive for initializing session", async () => {
+  it("rejects if session is initializing", async () => {
     const ctx = mockCtx(456);
     const core = {
       sessionManager: {
@@ -55,8 +55,8 @@ describe("handleArchive", () => {
 
     await handleArchive(ctx, core);
     expect(ctx.reply).toHaveBeenCalledWith(
-      expect.stringContaining("Archive this session topic"),
-      expect.objectContaining({ reply_markup: expect.any(Object) }),
+      expect.stringContaining("wait for session"),
+      expect.any(Object),
     );
   });
 

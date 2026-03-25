@@ -141,7 +141,7 @@ describe("handleSummary", () => {
 
     await handleSummary(ctx, core);
     expect(ctx.reply).toHaveBeenCalledWith(
-      expect.stringContaining("has ended"),
+      expect.stringContaining("session has ended"),
       expect.any(Object),
     );
   });
@@ -201,7 +201,9 @@ describe("handleSummaryCallback", () => {
     } as any;
 
     await handleSummaryCallback(ctx, core, 123);
-    expect(ctx.answerCallbackQuery).toHaveBeenCalledTimes(2);
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("ended") }),
+    );
   });
 
   it("sends summary to session topic on success", async () => {

@@ -146,13 +146,12 @@ export class Session extends TypedEmitter<SessionEvents> {
   }
 
   private async processPrompt(text: string, attachments?: Attachment[]): Promise<void> {
-    if (text !== "\x00__warmup__") {
-      this.promptCount++;
-    }
     if (text === "\x00__warmup__") {
       await this.runWarmup();
       return;
     }
+
+    this.promptCount++;
 
     if (this._status === "initializing") {
       this.activate();
@@ -345,6 +344,7 @@ export class Session extends TypedEmitter<SessionEvents> {
 
   async generateSummary(timeoutMs = 15000): Promise<string> {
     let summary = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const captureHandler = (event: AgentEvent) => {
       if (event.type === "text") summary += event.content;
@@ -357,15 +357,16 @@ export class Session extends TypedEmitter<SessionEvents> {
       const promptPromise = this.agentInstance.prompt(
         "Summarize what you've accomplished so far in this session in 2-3 sentences. Include: key files changed, decisions made, and current status. Reply ONLY with the summary, nothing else.",
       );
-      const timeoutPromise = new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error("summary timeout")), timeoutMs),
-      );
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("summary timeout")), timeoutMs);
+      });
       await Promise.race([promptPromise, timeoutPromise]);
       return summary.trim().slice(0, 500);
     } catch {
       this.log.warn("Failed to generate session summary");
       return "";
     } finally {
+      if (timer) clearTimeout(timer);
       this.agentInstance.off("agent_event", captureHandler);
       this.clearBuffer();
       this.resume();

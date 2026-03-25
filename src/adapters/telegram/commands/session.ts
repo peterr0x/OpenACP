@@ -400,7 +400,12 @@ export async function handleArchive(
     return;
   }
 
-  if (session.status === "finished" || session.status === "cancelled" || session.status === "error") {
+  if (session.status === "initializing") {
+    await ctx.reply("⏳ Please wait for session to be ready.", { parse_mode: "HTML" });
+    return;
+  }
+
+  if (session.status !== "active") {
     await ctx.reply(`⚠️ Cannot archive — session is ${session.status}.`, { parse_mode: "HTML" });
     return;
   }
@@ -478,7 +483,7 @@ export async function handleSummary(
   }
 
   if (session.status !== "active") {
-    await ctx.reply("⚠️ Session has ended. Summary is only available for active sessions.", { parse_mode: "HTML" });
+    await ctx.reply("⚠️ This session has ended. Use /summary while a session is still active to get a recap.", { parse_mode: "HTML" });
     return;
   }
 
@@ -500,19 +505,19 @@ export async function handleSummaryCallback(
   const data = ctx.callbackQuery?.data;
   if (!data) return;
 
-  try {
-    await ctx.answerCallbackQuery();
-  } catch { /* expired */ }
-
   const sessionId = data.replace("sm:summary:", "");
   const session = core.sessionManager.getSession(sessionId);
 
   if (!session || session.status !== "active") {
     try {
       await ctx.answerCallbackQuery({ text: "Session has ended, summary not available." });
-    } catch { /* already answered */ }
+    } catch { /* expired */ }
     return;
   }
+
+  try {
+    await ctx.answerCallbackQuery();
+  } catch { /* expired */ }
 
   const threadId = Number(session.threadId);
   if (!threadId) return;
