@@ -200,16 +200,55 @@ export class OpenACPCore {
   // --- Summary ---
 
   async summarizeSession(sessionId: string): Promise<{ ok: true; summary: string } | { ok: false; error: string }> {
+    // Active session — summarize directly
     const session = this.sessionManager.getSession(sessionId);
-    if (!session) return { ok: false, error: "Session not found" };
-    if (session.status !== "active") return { ok: false, error: `Session is ${session.status}, summary is only available for active sessions` };
+    if (session && session.status === "active") {
+      try {
+        const summary = await session.generateSummary();
+        if (!summary) return { ok: false, error: "Agent could not generate summary" };
+        return { ok: true, summary };
+      } catch (err) {
+        return { ok: false, error: (err as Error).message };
+      }
+    }
 
+    // Ended session — respawn agent temporarily with conversation history
+    const record = this.sessionManager.getSessionRecord(sessionId);
+    if (!record?.agentSessionId) {
+      return { ok: false, error: "Session not found or has no agent history" };
+    }
+
+    const caps = (await import("./agent-registry.js")).getAgentCapabilities(record.agentName);
+    if (!caps.supportsResume) {
+      return { ok: false, error: `Agent "${record.agentName}" does not support resume — cannot summarize ended session` };
+    }
+
+    let agentInstance: import("./agent-instance.js").AgentInstance | undefined;
     try {
-      const summary = await session.generateSummary();
+      agentInstance = await this.agentManager.resume(
+        record.agentName,
+        record.workingDir,
+        record.agentSessionId,
+      );
+
+      const tempSession = new Session({
+        id: `summary-${sessionId}`,
+        channelId: record.channelId,
+        agentName: record.agentName,
+        workingDirectory: record.workingDir,
+        agentInstance,
+      });
+      tempSession.activate();
+
+      const summary = await tempSession.generateSummary();
       if (!summary) return { ok: false, error: "Agent could not generate summary" };
       return { ok: true, summary };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
+    } finally {
+      if (agentInstance) {
+        try { await agentInstance.destroy(); } catch { /* best effort */ }
+      }
     }
   }
 

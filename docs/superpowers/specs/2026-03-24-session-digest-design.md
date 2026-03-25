@@ -32,10 +32,12 @@ Users running multiple sessions lose track of what each agent did. There's no qu
 User triggers summary (button or /summary command)
   ↓
   ├── Active session? → prompt current agent → display response in topic
-  └── Ended session?  → display "Session has ended, summary not available"
+  └── Ended session?  → respawn agent with conversation history → prompt → display → destroy temp agent
 ```
 
 No new store. No new persistence. Summary is a regular agent response displayed in the session topic.
+
+For ended sessions, the agent is temporarily respawned using `resumeAgentSessionId` from the session record. After generating the summary, the temp agent is destroyed. This only works for agents that support resume (e.g., Claude ACP).
 
 ### `/summary` Command (Telegram)
 

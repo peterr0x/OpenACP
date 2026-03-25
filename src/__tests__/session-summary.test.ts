@@ -118,7 +118,10 @@ describe("handleSummary", () => {
       reply: vi.fn(() => Promise.resolve()),
     } as any;
     const core = {
-      sessionManager: { getSessionByThread: vi.fn(() => undefined) },
+      sessionManager: {
+        getSessionByThread: vi.fn(() => undefined),
+        getRecordByThread: vi.fn(() => undefined),
+      },
     } as any;
 
     await handleSummary(ctx, core);
@@ -128,20 +131,24 @@ describe("handleSummary", () => {
     );
   });
 
-  it("rejects ended session", async () => {
+  it("calls summarizeSession for ended session via record", async () => {
     const ctx = {
       message: { message_thread_id: 456 },
       reply: vi.fn(() => Promise.resolve()),
+      replyWithChatAction: vi.fn(() => Promise.resolve()),
     } as any;
     const core = {
       sessionManager: {
-        getSessionByThread: vi.fn(() => ({ id: "s1", status: "finished" })),
+        getSessionByThread: vi.fn(() => undefined),
+        getRecordByThread: vi.fn(() => ({ sessionId: "s1", name: "Old Session" })),
       },
+      summarizeSession: vi.fn(() => Promise.resolve({ ok: true, summary: "Did some work." })),
     } as any;
 
     await handleSummary(ctx, core);
+    expect(core.summarizeSession).toHaveBeenCalledWith("s1");
     expect(ctx.reply).toHaveBeenCalledWith(
-      expect.stringContaining("session has ended"),
+      expect.stringContaining("Did some work"),
       expect.any(Object),
     );
   });
@@ -191,18 +198,26 @@ describe("handleSummary", () => {
 // --- handleSummaryCallback ---
 
 describe("handleSummaryCallback", () => {
-  it("rejects ended session", async () => {
+  it("uses record for ended session", async () => {
     const ctx = {
       callbackQuery: { data: "sm:summary:sess-1" },
       answerCallbackQuery: vi.fn(() => Promise.resolve()),
+      api: { sendMessage: vi.fn(() => Promise.resolve()) },
     } as any;
     const core = {
-      sessionManager: { getSession: vi.fn(() => null) },
+      sessionManager: {
+        getSession: vi.fn(() => null),
+        getSessionRecord: vi.fn(() => ({ sessionId: "sess-1", name: "Old", platform: { topicId: 456 } })),
+      },
+      summarizeSession: vi.fn(() => Promise.resolve({ ok: true, summary: "Recap." })),
     } as any;
 
     await handleSummaryCallback(ctx, core, 123);
-    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("ended") }),
+    expect(core.summarizeSession).toHaveBeenCalledWith("sess-1");
+    expect(ctx.api.sendMessage).toHaveBeenCalledWith(
+      123,
+      expect.stringContaining("Recap"),
+      expect.objectContaining({ message_thread_id: 456 }),
     );
   });
 

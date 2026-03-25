@@ -487,24 +487,22 @@ export async function handleSummary(
   if (!threadId) return;
 
   const session = core.sessionManager.getSessionByThread("telegram", String(threadId));
-  if (!session) {
+  const record = !session ? core.sessionManager.getRecordByThread("telegram", String(threadId)) : undefined;
+  const sessionId = session?.id ?? record?.sessionId;
+
+  if (!sessionId) {
     await ctx.reply(
-      "ℹ️ <b>/summary</b> works in session topics — it asks the agent to summarize the current session.\n\nGo to an active session topic and type /summary there.",
+      "ℹ️ <b>/summary</b> works in session topics — it asks the agent to summarize the session.\n\nGo to a session topic and type /summary there.",
       { parse_mode: "HTML" },
     );
     return;
   }
 
-  if (session.status !== "active") {
-    await ctx.reply("⚠️ This session has ended. Use /summary while a session is still active to get a recap.", { parse_mode: "HTML" });
-    return;
-  }
-
   await ctx.replyWithChatAction("typing");
-  const result = await core.summarizeSession(session.id);
+  const result = await core.summarizeSession(sessionId);
 
   if (result.ok) {
-    await ctx.reply(formatSummary(result.summary, session.name), { parse_mode: "HTML" });
+    await ctx.reply(formatSummary(result.summary, session?.name ?? record?.name), { parse_mode: "HTML" });
   } else {
     await ctx.reply(`⚠️ ${escapeHtml(result.error)}`, { parse_mode: "HTML" });
   }
@@ -519,20 +517,16 @@ export async function handleSummaryCallback(
   if (!data) return;
 
   const sessionId = data.replace("sm:summary:", "");
-  const session = core.sessionManager.getSession(sessionId);
-
-  if (!session || session.status !== "active") {
-    try {
-      await ctx.answerCallbackQuery({ text: "Session has ended, summary not available." });
-    } catch { /* expired */ }
-    return;
-  }
 
   try {
     await ctx.answerCallbackQuery();
   } catch { /* expired */ }
 
-  const threadId = Number(session.threadId);
+  // Find thread ID from active session or stored record
+  const session = core.sessionManager.getSession(sessionId);
+  const record = !session ? core.sessionManager.getSessionRecord(sessionId) : undefined;
+  const platform = record?.platform as { topicId?: number } | undefined;
+  const threadId = session ? Number(session.threadId) : (platform?.topicId ?? 0);
   if (!threadId) return;
 
   await ctx.api.sendMessage(chatId, "📋 Generating summary...", {
@@ -541,8 +535,9 @@ export async function handleSummaryCallback(
   });
 
   const result = await core.summarizeSession(sessionId);
+  const sessionName = session?.name ?? record?.name;
   if (result.ok) {
-    await ctx.api.sendMessage(chatId, formatSummary(result.summary, session.name), {
+    await ctx.api.sendMessage(chatId, formatSummary(result.summary, sessionName), {
       message_thread_id: threadId,
       parse_mode: "HTML",
     });
